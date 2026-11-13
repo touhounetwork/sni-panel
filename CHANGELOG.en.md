@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-11-14
+
+### Features and improvements
+
+- Panel listen address: the new `FORWARDX_LISTEN_HOST` environment variable limits the panel to an address such as `127.0.0.1`; empty still listens on every address. The local and Docker installers keep it across upgrades, and Docker deployments apply it to the host side of the port mapping.
+
+### Version and upgrade notes
+
+- Panel: `3.10.1`; Agent and ForwardX FXP runtime: `3.10.0`. Upgrades from 3.10.0 require only the panel update; without `FORWARDX_LISTEN_HOST` the behavior is unchanged.
+
 ## [3.10.0] - 2026-11-13
 
 ### Features and improvements

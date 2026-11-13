@@ -163,6 +163,21 @@ valid_port() {
   [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
+# Optional listen address (IPv4, IPv6 or hostname); empty listens on every address.
+valid_listen_host() {
+  [ -z "$1" ] || [[ "$1" =~ ^[0-9A-Za-z._:%-]+$|^\[[0-9A-Fa-f:.%]+\]$ ]]
+}
+
+resolve_listen_host() {
+  if [ -z "${FORWARDX_LISTEN_HOST+x}" ]; then
+    FORWARDX_LISTEN_HOST="$(get_env_value FORWARDX_LISTEN_HOST || true)"
+  fi
+  if ! valid_listen_host "$FORWARDX_LISTEN_HOST"; then
+    echo "[ERROR] Invalid FORWARDX_LISTEN_HOST: $FORWARDX_LISTEN_HOST" >&2
+    exit 1
+  fi
+}
+
 start_docker_service() {
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl enable --now docker 2>/dev/null || systemctl restart docker 2>/dev/null || true
@@ -577,6 +592,7 @@ load_existing_env() {
 
   value="$(get_env_value FORWARDX_IMAGE || true)"
   if [ -n "$value" ] && [ -z "${FORWARDX_IMAGE:-}" ] && [ "$ACTION" = "install" ]; then FORWARDX_IMAGE="$value"; fi
+  resolve_listen_host
 }
 
 latest_release_version() {
@@ -698,7 +714,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${PORT:-9810}:3000"
+      - "@PORT_BINDING@"
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -724,6 +740,14 @@ services:
         max-size: "${FORWARDX_LOG_MAX_SIZE:-20m}"
         max-file: "${FORWARDX_LOG_MAX_FILES:-3}"
 EOF
+  # The container always listens on 3000; FORWARDX_LISTEN_HOST only binds the host side.
+  local binding='${PORT:-9810}:3000'
+  if [ -n "${FORWARDX_LISTEN_HOST:-}" ]; then
+    local host="$FORWARDX_LISTEN_HOST"
+    if [[ "$host" == *:* && "$host" != \[* ]]; then host="[$host]"; fi
+    binding="$host:$binding"
+  fi
+  sed -i "s|@PORT_BINDING@|$binding|" "$APP_DIR/docker-compose.yml"
 }
 
 write_env() {
@@ -755,6 +779,9 @@ FORWARDX_IMAGE=$image
 FORWARDX_GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL"
 FORWARDX_SETUP_LANGUAGE=$SETUP_LANGUAGE
 EOF
+  if [ -n "${FORWARDX_LISTEN_HOST:-}" ]; then
+    printf 'FORWARDX_LISTEN_HOST=%s\n' "${FORWARDX_LISTEN_HOST:-}" >> "$APP_DIR/.env"
+  fi
   )
 }
 

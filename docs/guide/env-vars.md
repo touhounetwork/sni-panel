@@ -38,6 +38,7 @@ FORWARDX_IMAGE 等镜像变量主要由 Compose/安装器读取，不是容器�
 | --- | --- | --- |
 | `PORT` | `9810` | 面板对外访问端口。本地部署时是面板监听端口；Docker Compose 中通常是宿主机端口，容器内仍监听 `3000`。 |
 | `FORWARDX_PUBLIC_PORT` / `FORWARDX_EXTERNAL_PORT` | 跟随 `PORT` | 面板在后台展示的对外端口。官方 `docker-compose.yml` 已把它固定为跟随 `PORT`，Docker 部署时在 `.env` 中单独设置它不会生效。 |
+| `FORWARDX_LISTEN_HOST` | 空 | 面板监听地址，例如 `127.0.0.1`（只给本机反向代理）或 `::1`。留空时监听全部 IPv4／IPv6 地址。本地部署写在 `.env`，重启服务生效；Docker 部署时只绑定宿主机一侧的端口映射，容器内仍监听全部地址，在 `.env` 设置后重新运行安装脚本的升级命令即可写入 `docker-compose.yml`。安装脚本升级时会保留这一项。 |
 | `FORWARDX_TRUST_PROXY` | `loopback` | 允许携带 `X-Forwarded-*` 的可信代理。可填 `loopback`、`false`、代理跳数，或逗号分隔的 IP / 网段列表。出于安全考虑，`true`、`all`、`*` 会被当作不信任处理。 |
 | `NODE_ENV` | `production` | 运行模式，正式部署保持 `production`。 |
 | `FORWARDX_SETUP_LANGUAGE` | 空 | 首次部署向导默认语言：`zh-CN` / `en`；空或 `auto` 按浏览器 / IP。安装脚本的 `--language` 参数会保存此项，手动选择优先，初始化完成后不覆盖正常语言检测。 |

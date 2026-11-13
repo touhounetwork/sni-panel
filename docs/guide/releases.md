@@ -1,6 +1,18 @@
 # 版本与文档更新
 
-## 本版源码 3.9.0
+## 本版源码 3.10.1
+
+面板源码版本为 `3.10.1`，Agent 和 ForwardX FXP runtime 保持 `3.10.0`，从 3.10.0 升级只需更新面板。本版新增环境变量 `FORWARDX_LISTEN_HOST`，可让面板只监听 `127.0.0.1` 等指定地址，留空时仍监听全部地址；本地和 Docker 安装脚本升级时保留该设置，Docker 部署绑定在宿主机端口映射上，容器内仍监听全部地址。用法见[环境变量](./env-vars.md)。
+
+## 3.10.0
+
+面板、Agent 和 ForwardX FXP runtime 源码版本统一为 `3.10.0`，累计兼容固定上游 2.3.293—2.3.300。SNI 分流器支持按规则发送、按入口端口接收 PROXY Protocol v1／v2，SNI 填 `*` 可作为入口端口的默认去向，域名唯一性改为按「入口主机 + 入口端口」；ForwardX 隧道的 UDP 可开启 PROXY Protocol v2。Agent 安装或升级后可执行自定义命令，主机管理新增仅管理员可用的批量命令。入口组、出口组、转发链、转发组、隧道级数、额外出口、备用出站和主机分组不再限制数量。
+
+合入上游的整条链路测速、主机独立面板地址、DDNS A + AAAA 双栈（新建不再提供 CNAME）、以 Agent 上报确认的自动换 IP、按同时在线来源 IP 数的 IP 限制、全站主题管理、单向／双向流量计费、管理员代入（禁止付款、凭据等写操作）、找回密码、邮件提醒改进、开发者公告和数据库网络防护；Agent Token、主机与隧道的写操作改为仅管理员。组解析仍按本地入口健康判断，SNI、DDNS 与 Docker 共存沿用既有规则。
+
+上述 SNI PROXY、默认去向、安装后命令和批量命令需要 Agent `3.10.0` 或更高版本，版本不足时面板拒绝开启或记为「版本不支持」。转发服务的 `LimitNOFILE` 改为 `infinity`；转发运行时改为在本仓库发布流程中从源码编译，节点升级 Agent 时会替换原有 gost，正在运行的转发可能短暂中断，请在维护窗口升级。在线升级、安装脚本、Docker 镜像和发布流程改为 `touhounetwork/sni-panel`。完整变更见[更新日志](https://github.com/touhounetwork/sni-panel/blob/main/CHANGELOG.md)，具体发布状态以本项目的 [GitHub Releases](https://github.com/touhounetwork/sni-panel/releases) 为准；生产升级单独执行。
+
+## 3.9.0
 
 面板、Agent 和 ForwardX FXP runtime 源码版本统一为 `3.9.0`，累计兼容固定上游 2.3.290—2.3.292。新增批量规则后台任务、端口范围与 TXT 导入导出、安装实例接管、连接数、受限 LXC 流量统计回退和三日日志；加固登录签名密钥与请求接收，改进数据库查询、记账及网页。套餐和按量管理保留卡片／表格双视图，本地 SNI、入口健康、DDNS、Docker 共存及已落地的交接修复继续保留。
 

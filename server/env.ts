@@ -47,6 +47,8 @@ export const ENV = {
   databaseConfigPath: process.env.DATABASE_CONFIG_PATH ?? process.env.DB_CONFIG_PATH ?? "/data/database.json",
   sqlitePath: process.env.SQLITE_PATH ?? "/data/forwardx.db",
   port: Number.parseInt(process.env.PORT || "9810", 10),
+  // Production listen address; empty keeps listening on every interface.
+  listenHost: (process.env.FORWARDX_LISTEN_HOST ?? "").trim().replace(/^\[(.*)\]$/, "$1"),
   publicPort: readIntEnv(["FORWARDX_PUBLIC_PORT", "FORWARDX_EXTERNAL_PORT"], 0, 1, 65535),
   portConfigPath: process.env.FORWARDX_PORT_CONFIG_PATH ?? "",
   portManagement: process.env.FORWARDX_PORT_MANAGEMENT ?? "",

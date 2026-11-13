@@ -133,6 +133,21 @@ valid_port() {
   [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
+# Optional listen address (IPv4, IPv6 or hostname); empty listens on every address.
+valid_listen_host() {
+  [ -z "$1" ] || [[ "$1" =~ ^[0-9A-Za-z._:%-]+$|^\[[0-9A-Fa-f:.%]+\]$ ]]
+}
+
+resolve_listen_host() {
+  if [ -z "${FORWARDX_LISTEN_HOST+x}" ]; then
+    FORWARDX_LISTEN_HOST="$(get_env_value FORWARDX_LISTEN_HOST || true)"
+  fi
+  if ! valid_listen_host "$FORWARDX_LISTEN_HOST"; then
+    echo "[ERROR] Invalid FORWARDX_LISTEN_HOST: $FORWARDX_LISTEN_HOST" >&2
+    exit 1
+  fi
+}
+
 normalize_version() {
   local raw="${1:-}"
   raw="${raw#v}"
@@ -425,6 +440,7 @@ resolve_runtime_env() {
   if [ -z "${JWT_SECRET:-}" ] && [ -n "$existing_jwt" ]; then
     JWT_SECRET="$existing_jwt"
   fi
+  resolve_listen_host
   resolve_github_accelerator
 }
 
@@ -781,6 +797,9 @@ FORWARDX_GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL"
 FORWARDX_SETUP_LANGUAGE=$SETUP_LANGUAGE
 FORWARDX_UPGRADE_COMMAND="/bin/bash $APP_DIR/scripts/install-panel-local.sh upgrade"
 EOF
+  if [ -n "${FORWARDX_LISTEN_HOST:-}" ]; then
+    printf 'FORWARDX_LISTEN_HOST=%s\n' "${FORWARDX_LISTEN_HOST:-}" >> "$APP_DIR/.env"
+  fi
   )
 }
 

@@ -171,7 +171,7 @@ async function startServer() {
   const preferredPort = Number.parseInt(process.env.PORT || "9810", 10);
   const isProduction = process.env.NODE_ENV === "production";
   const isDevPanel = process.env.FORWARDX_DEV_PANEL === "1";
-  const listenHost = isDevPanel ? (process.env.FORWARDX_DEV_SERVER_HOST || "127.0.0.1") : undefined;
+  const listenHost = isDevPanel ? (process.env.FORWARDX_DEV_SERVER_HOST || "127.0.0.1") : (ENV.listenHost || undefined);
   const port = isProduction
     ? preferredPort
     : await runStartupStep("find-port", () => findAvailablePort(preferredPort, listenHost));
