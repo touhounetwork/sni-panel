@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-11-12
+
+### Features and improvements
+
+- The SNI splitter supports PROXY Protocol: SNI rules on port forwarding resources and host failover groups can send a v1 or v2 header to the destination per rule (header first, then the replayed client handshake), and each entry port can receive upstream v1/v2 headers, using the parsed client address for connection limits and forwarding. Receiving belongs to the entry port and saving one rule applies it to every SNI rule on that port; with receiving on, connections without a header are closed. PROXY headers are not rate limited or counted as traffic.
+- SNI default destination: a rule whose SNI is `*` receives the entry port's unrecognised connections (non-TLS, handshake timeout, no SNI, no match), replaying the bytes already read, optionally with a PROXY header. At most one per entry port; without it, such connections are still closed.
+- SNI domains are now unique per entry host and entry port: different entry ports may use the same domain with different destinations, while one port still rejects duplicates.
+- UDP on ForwardX tunnels can use PROXY Protocol v2: every datagram starts with a v2 header (0x12/0x22), received from upstream or sent to the target. v1 has no UDP form, and kernel forwarding, realm and GOST cannot add a header to each datagram, so the switch is disabled there with an explanation.
+- Run a custom command after installing or upgrading the Agent: System Settings holds a global default, and the host editor offers "Use global command", "Use this node's command", "Append this node's command" (global first, then the node's, run separately) or "Do not run". First installs, terminal upgrades and panel-initiated upgrades run it as root once the new Agent has registered and started, with a 10-minute timeout; failures only warn and never affect the Agent. The Agent fetches the command over the encrypted channel, so it never appears in the public install script; the host editor shows the last run's exit code, duration and output (last 1MB kept). Changes are recorded in the configuration audit as a digest, never the command text.
+- Host management adds a "Batch commands" tab (admins only): pick nodes (by group or all online nodes at once) and run one command as root with `/bin/sh`, with a 10–3600 second timeout and a confirmation first. Each node shows its status, exit code, duration and output (last 1MB kept), and the whole batch or a single node can be cancelled; each node runs one command at a time and queues the rest locally. Offline nodes, or nodes without a live event stream, are marked as not delivered and never run the command after reconnecting. The event stream carries only a task id; the Agent fetches the command over the encrypted channel with its own token, and retired installations cannot fetch it. Runs are kept for 30 days and a past command can be reused in one click; the configuration audit records the nodes, timeout and a digest of the command, never its text.
+- Remove count caps on link topology: members of entry groups, exit groups, forward chains and forward groups (previously 20), multi-hop tunnel hops (previously 10), extra exits for tunnel load balancing (previously 4), backup destinations on rules and forward groups (previously 10) and host group members (previously 500) are no longer limited; existing minimums still apply.
+- Fix an intermittent hang in concurrent batch saves: reads of system settings or the shared query cache inside a transaction no longer wait for the same read started outside it and queued behind that transaction.
+
+### Version and upgrade notes
+
+- Source panel, Agent and ForwardX FXP runtime are aligned at `3.10.0`. SNI PROXY switches, the `*` default destination and UDP PROXY require entry Agent `3.10.0` or later; the panel refuses to enable them below that version and never sends them to older Agents.
+- Post-install commands require Agent `3.10.0` or later; on a node still running an older Agent the installer notes this and skips the step. A new `host_install_hooks` table is created automatically at startup.
+- Batch commands require Agent `3.10.0` or later; older nodes are marked "Version not supported". New `command_batches` and `command_batch_results` tables are created automatically at startup; run history is operational data and is not carried over by panel migration.
+- Upgrading clears PROXY settings left on SNI rules once (older splitters never used them), so no entry starts sending or expecting PROXY headers unexpectedly.
+- Online upgrades, install scripts, the Docker image and the release workflow now use `touhounetwork/sni-panel`.
+- systemd units for forwarding services (unified runtime, tunnel runtime, Nginx stream, realm, socat, their SNI entries and guarded backends) change from `LimitNOFILE=65535` to `LimitNOFILE=infinity`, which resolves to the kernel's `fs.nr_open`. Units are rewritten on the next sync; running services pick up the new limit the next time they restart (a config change or the Agent restarting them). OpenRC and SysV init are unchanged.
+
 ## [3.9.0] - 2026-10-29
 
 ### Features and improvements

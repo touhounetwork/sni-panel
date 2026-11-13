@@ -34,7 +34,7 @@ curl -fsSL https://panel.example.com/api/agent/install.sh | bash -s -- install Y
 
 ```bash
 curl --proxy 'socks5h://127.0.0.1:1080' -fsSL \
-  https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh \
+  https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh \
   -o /tmp/forwardx-install-agent.sh
 
 PANEL_URL='https://panel.example.com' bash /tmp/forwardx-install-agent.sh \
@@ -70,7 +70,7 @@ GOST 保留已有连接的新增方式需要本项目 Agent **3.3.0 或更新版
 卸载命令可在 Token 管理的安装命令弹窗中获取，通用卸载命令如下：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh | bash -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh | bash -s -- uninstall
 ```
 
 `proxy set` 支持隐藏输入，`set/off` 保存后重启 Agent。信息/代理查看会隐藏凭据，不建议用 `cat config.json` 向他人提供排障数据。

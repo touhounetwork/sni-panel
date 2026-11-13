@@ -4,7 +4,7 @@ Manage one logical rule across multiple entry servers, all forwarding directly t
 
 ## Setup
 
-1. Save an entry group with up to 20 hosts. Existing entry-group domain requirements remain; disable automatic DNS updates if you manage DNS yourself.
+1. Save an entry group with as many hosts as needed. Existing entry-group domain requirements remain; disable automatic DNS updates if you manage DNS yourself.
 2. Create or edit a **Port forwarding** resource. Select **Entry group** as its entry type, choose the saved group and a forwarding engine.
 3. Create a forwarding rule using that resource. Set the common listening port, protocol and destination.
 

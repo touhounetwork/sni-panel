@@ -1,5 +1,5 @@
 import { t as translateText } from "@/i18n";
-import { isValidSniValue, normalizeSniValue } from "@shared/sni";
+import { isValidSniRuleValue, normalizeSniValue } from "@shared/sni";
 
 // SNI 分流规则的真值来源始终是 sni 字段非空（见 .scratch/2026-09-15_SNI分流开关/spec.md）。
 // 这里的开关只是表单状态：它决定表单长什么样，不决定规则是什么。
@@ -194,12 +194,12 @@ export function sniToggleSupport(input: SniToggleSupportInput): SniToggleSupport
 export function sniDomainFormatError(value: string): string | null {
   const normalized = normalizeSniValue(value);
   if (!normalized) return null;
-  if (isValidSniValue(normalized)) return null;
-  return translateText("SNI 域名格式不正确：只填写完整域名，不含 https://、端口、路径或通配符");
+  if (isValidSniRuleValue(normalized)) return null;
+  return translateText("SNI 域名格式不正确：只填写完整域名或 *，不含 https://、端口、路径或通配符");
 }
 
 export function sniEntryPortCheckValue(enabled: boolean, value: string): string | null {
   if (!enabled) return null;
   const normalized = normalizeSniValue(value);
-  return normalized && isValidSniValue(normalized) ? normalized : null;
+  return normalized && isValidSniRuleValue(normalized) ? normalized : null;
 }

@@ -142,7 +142,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "3.9.0"
+	fxpRuntimeVersion    = "3.10.0"
 	fxpFallbackRetry     = 5 * time.Second
 	fxpFallbackDial      = 3 * time.Second
 	fxpShutdownDrain     = 5 * time.Second
@@ -816,12 +816,7 @@ func prepareEntryRuntime(cfg config) (*entryRuntime, error) {
 	}
 	if protocolHas(cfg, "udp") {
 		port := udpListenPort(cfg)
-		addr, err := net.ResolveUDPAddr("udp", listenAddress(cfg.ListenHost, port))
-		if err != nil {
-			runtime.close()
-			return nil, err
-		}
-		udpConn, err := net.ListenUDP("udp", addr)
+		udpConn, err := listenEntryUDP(listenAddress(cfg.ListenHost, port), udpProxyProtocolSends(cfg))
 		if err != nil {
 			runtime.close()
 			return nil, fmt.Errorf("entry udp listen :%d: %w", port, err)
@@ -996,6 +991,7 @@ type sniRouteRuntime struct {
 
 type sniRouteTable struct {
 	version int64
+	receive bool
 	bySNI   map[string]*sniRouteRuntime
 	byRule  map[int]*sniRouteRuntime
 }
@@ -1279,7 +1275,11 @@ func (store *sniRouteTableStore) status() sniRouteTableControlResponse {
 		response.SNIRoutes = make([]sniRoute, 0, len(table.bySNI))
 		for _, runtime := range table.bySNI {
 			if runtime != nil {
-				response.SNIRoutes = append(response.SNIRoutes, runtime.route)
+				route := runtime.route
+				// A runtime reused across a receive-only change keeps its old
+				// route copy; the table holds the listener's current switch.
+				route.ProxyProtocolReceive = table.receive
+				response.SNIRoutes = append(response.SNIRoutes, route)
 			}
 		}
 		sort.Slice(response.SNIRoutes, func(i, j int) bool {
@@ -1405,6 +1405,10 @@ func buildSNIRouteTable(version int64, routes []sniRoute, previous *sniRouteTabl
 		bySNI:   make(map[string]*sniRouteRuntime, len(routes)),
 		byRule:  make(map[int]*sniRouteRuntime, len(routes)),
 	}
+	if len(routes) > 0 {
+		// Validation keeps this switch identical on every route.
+		table.receive = routes[0].ProxyProtocolReceive
+	}
 	for _, route := range routes {
 		sni := normalizeSNIName(route.SNI)
 		if sni == "" {
@@ -1451,6 +1455,11 @@ func sniRouteSignature(route sniRoute) string {
 		strconv.Itoa(route.MaxIPs),
 		strings.TrimSpace(route.AccessScope),
 	}
+	// Receive is listener-wide and only affects connections accepted later,
+	// so it lives in the table signature and never resets established ones.
+	if route.ProxyProtocolSend {
+		parts = append(parts, "pp-send", strconv.Itoa(normalizeProxyProtocolVersion(route.ProxyProtocolVersion)))
+	}
 	return strings.Join(parts, "\x00")
 }
 
@@ -1463,7 +1472,10 @@ func sniRouteTableSignature(table *sniRouteTable) string {
 		ruleIDs = append(ruleIDs, ruleID)
 	}
 	sort.Ints(ruleIDs)
-	parts := make([]string, 0, len(ruleIDs))
+	parts := make([]string, 0, len(ruleIDs)+1)
+	if table.receive {
+		parts = append(parts, "pp-receive")
+	}
 	for _, ruleID := range ruleIDs {
 		if runtime := table.byRule[ruleID]; runtime != nil {
 			parts = append(parts, sniRouteSignature(runtime.route))
@@ -1643,30 +1655,58 @@ func acceptSniSplitterTCP(ln net.Listener, cfg config, store *sniRouteTableStore
 
 func handleSniSplitterTCP(client net.Conn, cfg config, store *sniRouteTableStore, active *sniSplitterConnSet) error {
 	defer client.Close()
-	sni, hello, err := readClientHelloForSNI(client, sniSplitterReadTimeout, sniSplitterMaxClientHello)
-	if err != nil {
-		store.recordUnmatched()
-		return err
+	source := proxyProtocolInfoFromConn(client)
+	var initial []byte
+	if table := store.current(); table != nil && table.receive {
+		payload, err := readInitialTCPPayload(client, sniSplitterReadTimeout)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		parsed, remaining, ok, err := consumeProxyProtocolFromConn(client, payload, sniSplitterReadTimeout)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("missing proxy protocol header")
+		}
+		// A LOCAL header carries no client address; keep the socket's.
+		if parsed.SourceIP != "" {
+			source = parsed
+		}
+		initial = remaining
 	}
-	if sni == "" {
-		store.recordUnmatched()
-		return nil
-	}
+	reader := &sniPrefixedConn{Conn: client, prefix: initial}
+	sni, hello, readErr := readClientHelloForSNI(reader, sniSplitterReadTimeout, sniSplitterMaxClientHello)
+	// Bytes the upstream sent after the hello in the same segment belong to
+	// the stream as well and must reach the target in order.
+	hello = append(hello, reader.prefix...)
 	sni = normalizeSNIName(sni)
-	runtime, version := store.lookup(sni)
+	var runtime *sniRouteRuntime
+	var version int64
+	if readErr == nil && sni != "" {
+		runtime, version = store.lookup(sni)
+	}
 	if runtime == nil {
 		store.recordUnmatched()
-		return nil
+		sni = sniDefaultRoute
+		runtime, version = store.lookup(sni)
+		if runtime == nil {
+			return readErr
+		}
 	}
+	clientAddr := proxyProtocolSourceAddr(source, client.RemoteAddr())
 	removeRuleActive := active.addForRule(runtime.route.RuleID, client)
 	defer removeRuleActive()
 	if !store.runtimeStillCurrent(sni, runtime) {
 		return nil
 	}
-	release, ok, reason := runtime.gate.acquire(client.RemoteAddr())
+	release, ok, reason := runtime.gate.acquire(clientAddr)
 	if !ok {
-		active, ips, connectionsForIP := runtime.gate.statsFor(client.RemoteAddr())
-		log.Printf("sni-splitter tcp rejected by connection gate rule=%d client=%s reason=%s active=%d maxConnections=%d distinctIPs=%d connectionsForIP=%d maxIPs=%d", runtime.route.RuleID, client.RemoteAddr(), reason, active, runtime.route.MaxConnections, ips, connectionsForIP, runtime.route.MaxIPs)
+		active, ips, connectionsForIP := runtime.gate.statsFor(clientAddr)
+		log.Printf("sni-splitter tcp rejected by connection gate rule=%d client=%s reason=%s active=%d maxConnections=%d distinctIPs=%d connectionsForIP=%d maxIPs=%d", runtime.route.RuleID, clientAddr, reason, active, runtime.route.MaxConnections, ips, connectionsForIP, runtime.route.MaxIPs)
 		return nil
 	}
 	defer release()
@@ -1680,6 +1720,12 @@ func handleSniSplitterTCP(client net.Conn, cfg config, store *sniRouteTableStore
 	if runtime.counter != nil {
 		runtime.counter.connections.Add(1)
 	}
+	if runtime.route.ProxyProtocolSend {
+		// The header is transport metadata: neither rate limited nor counted.
+		if err := writeAll(target, formatProxyProtocolInfo(runtime.route.ProxyProtocolVersion, source)); err != nil {
+			return err
+		}
+	}
 	if len(hello) > 0 {
 		runtime.inLimiter.wait(len(hello))
 		if err := writeAll(target, hello); err != nil {
@@ -1689,8 +1735,41 @@ func handleSniSplitterTCP(client net.Conn, cfg config, store *sniRouteTableStore
 			runtime.counter.in.Add(uint64(len(hello)))
 		}
 	}
-	fxpVerbosef("sni-splitter tcp routed rule=%d listen=%d version=%d client=%s sni=%s target=%s:%d", runtime.route.RuleID, cfg.ListenPort, version, client.RemoteAddr(), runtime.route.SNI, runtime.route.TargetIP, runtime.route.TargetPort)
+	fxpVerbosef("sni-splitter tcp routed rule=%d listen=%d version=%d client=%s sni=%s target=%s:%d", runtime.route.RuleID, cfg.ListenPort, version, clientAddr, runtime.route.SNI, runtime.route.TargetIP, runtime.route.TargetPort)
 	return proxyPlainTCPWithCounter(client, target, runtime.inLimiter, runtime.outLimiter, runtime.counter)
+}
+
+// sniPrefixedConn replays bytes read past a PROXY header before reading the
+// socket again, so the ClientHello parser sees the original stream.
+type sniPrefixedConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *sniPrefixedConn) Read(p []byte) (int, error) {
+	if len(c.prefix) > 0 {
+		n := copy(p, c.prefix)
+		c.prefix = c.prefix[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+func proxyProtocolSourceAddr(info proxyProtocolInfo, fallback net.Addr) net.Addr {
+	if ip := net.ParseIP(strings.TrimSpace(info.SourceIP)); ip != nil {
+		return &net.TCPAddr{IP: ip, Port: info.SourcePort}
+	}
+	return fallback
+}
+
+func formatProxyProtocolInfo(version int, info proxyProtocolInfo) []byte {
+	return formatProxyProtocol(helloFrame{
+		ProxySourceIP:        info.SourceIP,
+		ProxySourcePort:      info.SourcePort,
+		ProxyDestIP:          info.DestIP,
+		ProxyDestPort:        info.DestPort,
+		ProxyProtocolVersion: version,
+	})
 }
 
 func readClientHelloForSNI(conn net.Conn, timeout time.Duration, maxBytes int) (string, []byte, error) {
@@ -1701,9 +1780,11 @@ func readClientHelloForSNI(conn net.Conn, timeout time.Duration, maxBytes int) (
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 		defer conn.SetReadDeadline(time.Time{})
 	}
+	// Every error path returns all bytes read so far; the default route
+	// replays them unchanged.
 	header := make([]byte, 5)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return "", nil, err
+	if n, err := io.ReadFull(conn, header); err != nil {
+		return "", header[:n], err
 	}
 	if header[0] != 0x16 {
 		return "", header, errors.New("not a TLS handshake record")
@@ -1714,8 +1795,8 @@ func readClientHelloForSNI(conn net.Conn, timeout time.Duration, maxBytes int) (
 	}
 	hello := make([]byte, 5+recordLen)
 	copy(hello, header)
-	if _, err := io.ReadFull(conn, hello[5:]); err != nil {
-		return "", hello[:5], err
+	if n, err := io.ReadFull(conn, hello[5:]); err != nil {
+		return "", hello[:5+n], err
 	}
 	sni, err := parseClientHelloSNI(hello)
 	if err != nil {
@@ -2219,6 +2300,17 @@ func readProxyProtocolMore(conn net.Conn, timeout time.Duration, limit int) ([]b
 }
 
 func consumeProxyProtocolV2(data []byte) (proxyProtocolInfo, []byte, bool, error) {
+	return parseProxyProtocolV2(data, false)
+}
+
+// consumeProxyProtocolV2Datagram parses the v2 header carried at the start of
+// one UDP datagram. v1 has no UDP form, and stream (TCP) families are rejected
+// so a TCP header can never be mistaken for a datagram source, or vice versa.
+func consumeProxyProtocolV2Datagram(data []byte) (proxyProtocolInfo, []byte, bool, error) {
+	return parseProxyProtocolV2(data, true)
+}
+
+func parseProxyProtocolV2(data []byte, datagram bool) (proxyProtocolInfo, []byte, bool, error) {
 	if !bytes.HasPrefix(data, proxyProtocolV2Signature) {
 		return proxyProtocolInfo{}, data, false, nil
 	}
@@ -2243,19 +2335,24 @@ func consumeProxyProtocolV2(data []byte) (proxyProtocolInfo, []byte, bool, error
 	if command != 0x1 {
 		return proxyProtocolInfo{}, nil, false, errors.New("unsupported proxy protocol v2 command")
 	}
-	switch familyProtocol {
-	case 0x11:
+	if familyProtocol == 0x00 {
+		return proxyProtocolInfo{}, remaining, true, nil
+	}
+	transport := familyProtocol & 0x0f
+	if (transport == 0x2) != datagram || (transport != 0x1 && transport != 0x2) {
+		return proxyProtocolInfo{}, nil, false, errors.New("proxy protocol v2 transport does not match the connection")
+	}
+	switch familyProtocol >> 4 {
+	case 0x1:
 		if len(payload) < 12 {
-			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 tcp4 payload")
+			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 ipv4 payload")
 		}
 		return proxyProtocolInfo{SourceIP: net.IP(payload[0:4]).String(), DestIP: net.IP(payload[4:8]).String(), SourcePort: int(binary.BigEndian.Uint16(payload[8:10])), DestPort: int(binary.BigEndian.Uint16(payload[10:12]))}, remaining, true, nil
-	case 0x21:
+	case 0x2:
 		if len(payload) < 36 {
-			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 tcp6 payload")
+			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 ipv6 payload")
 		}
 		return proxyProtocolInfo{SourceIP: net.IP(payload[0:16]).String(), DestIP: net.IP(payload[16:32]).String(), SourcePort: int(binary.BigEndian.Uint16(payload[32:34])), DestPort: int(binary.BigEndian.Uint16(payload[34:36]))}, remaining, true, nil
-	case 0x00:
-		return proxyProtocolInfo{}, remaining, true, nil
 	default:
 		return proxyProtocolInfo{}, nil, false, errors.New("unsupported proxy protocol v2 address family")
 	}
@@ -2270,16 +2367,54 @@ func formatProxyProtocol(hello helloFrame) []byte {
 
 func formatProxyProtocolV2(hello helloFrame) []byte {
 	sourceIP, destIP, sourcePort, destPort := proxyProtocolHelloValues(hello)
-	src := net.ParseIP(sourceIP)
-	dst := net.ParseIP(destIP)
-	if src == nil || dst == nil || sourcePort <= 0 || destPort <= 0 {
+	return buildProxyProtocolV2(net.ParseIP(sourceIP), net.ParseIP(destIP), sourcePort, destPort, false)
+}
+
+// formatProxyProtocolV2UDP builds the header prepended to one UDP datagram.
+// A UDP listener bound to a wildcard reports an unspecified or dual-stack
+// local address; the destination is mapped into the source's family so a
+// real client source is never downgraded to a LOCAL header.
+func formatProxyProtocolV2UDP(source, dest *net.UDPAddr) []byte {
+	if source == nil || source.IP == nil {
 		return formatProxyProtocolV2Local()
+	}
+	destIP := net.IPv4zero
+	destPort := 0
+	if dest != nil {
+		destPort = dest.Port
+		if dest.IP != nil && !dest.IP.IsUnspecified() {
+			destIP = dest.IP
+		}
+	}
+	if src4 := source.IP.To4(); src4 != nil {
+		if dst4 := destIP.To4(); dst4 != nil {
+			return buildProxyProtocolV2(src4, dst4, source.Port, destPort, true)
+		}
+		return buildProxyProtocolV2(src4, net.IPv4zero, source.Port, destPort, true)
+	}
+	if destIP.To4() != nil {
+		if destIP.Equal(net.IPv4zero) {
+			destIP = net.IPv6unspecified
+		} else {
+			destIP = destIP.To16()
+		}
+	}
+	return buildProxyProtocolV2(source.IP.To16(), destIP.To16(), source.Port, destPort, true)
+}
+
+func buildProxyProtocolV2(src, dst net.IP, sourcePort, destPort int, datagram bool) []byte {
+	if src == nil || dst == nil || sourcePort <= 0 || sourcePort > 65535 || destPort < 0 || destPort > 65535 || (!datagram && destPort <= 0) {
+		return formatProxyProtocolV2Local()
+	}
+	transport := byte(0x1)
+	if datagram {
+		transport = 0x2
 	}
 	if src4, dst4 := src.To4(), dst.To4(); src4 != nil && dst4 != nil {
 		buf := make([]byte, 28)
 		copy(buf, proxyProtocolV2Signature)
 		buf[12] = 0x21
-		buf[13] = 0x11
+		buf[13] = 0x10 | transport
 		binary.BigEndian.PutUint16(buf[14:16], 12)
 		copy(buf[16:20], src4)
 		copy(buf[20:24], dst4)
@@ -2289,19 +2424,34 @@ func formatProxyProtocolV2(hello helloFrame) []byte {
 	}
 	src16 := src.To16()
 	dst16 := dst.To16()
-	if src16 == nil || dst16 == nil || src.To4() != nil || dst.To4() != nil {
+	// TCP keeps its historical LOCAL fallback for mixed families; datagram
+	// callers have already mapped both endpoints into IPv6.
+	if src16 == nil || dst16 == nil || (!datagram && (src.To4() != nil || dst.To4() != nil)) {
 		return formatProxyProtocolV2Local()
 	}
 	buf := make([]byte, 52)
 	copy(buf, proxyProtocolV2Signature)
 	buf[12] = 0x21
-	buf[13] = 0x21
+	buf[13] = 0x20 | transport
 	binary.BigEndian.PutUint16(buf[14:16], 36)
 	copy(buf[16:32], src16)
 	copy(buf[32:48], dst16)
 	binary.BigEndian.PutUint16(buf[48:50], uint16(sourcePort))
 	binary.BigEndian.PutUint16(buf[50:52], uint16(destPort))
 	return buf
+}
+
+// proxyProtocolV2HeaderLen reports the length of a complete v2 header at the
+// start of data, or 0 when there is none.
+func proxyProtocolV2HeaderLen(data []byte) int {
+	if len(data) < 16 || !bytes.HasPrefix(data, proxyProtocolV2Signature) {
+		return 0
+	}
+	length := 16 + int(binary.BigEndian.Uint16(data[14:16]))
+	if length > len(data) {
+		return 0
+	}
+	return length
 }
 
 func formatProxyProtocolV2Local() []byte {
@@ -2326,21 +2476,28 @@ func proxyProtocolHelloValues(hello helloFrame) (string, string, int, int) {
 	return sourceIP, destIP, sourcePort, destPort
 }
 func formatProxyProtocolV1(hello helloFrame) string {
-	sourceIP := strings.TrimSpace(hello.ProxySourceIP)
-	destIP := strings.TrimSpace(hello.ProxyDestIP)
-	if destIP == "" {
-		destIP = strings.TrimSpace(hello.TargetIP)
+	sourceIP, destIP, sourcePort, destPort := proxyProtocolHelloValues(hello)
+	src := net.ParseIP(sourceIP)
+	dst := net.ParseIP(destIP)
+	// A header with missing endpoints is malformed; UNKNOWN is the v1 form
+	// receivers must accept for "no address information".
+	if src == nil || dst == nil || sourcePort <= 0 || sourcePort > 65535 || destPort <= 0 || destPort > 65535 {
+		return "PROXY UNKNOWN\r\n"
 	}
-	sourcePort := hello.ProxySourcePort
-	destPort := hello.ProxyDestPort
-	if destPort <= 0 {
-		destPort = hello.TargetPort
+	if src4, dst4 := src.To4(), dst.To4(); src4 != nil && dst4 != nil {
+		return fmt.Sprintf("PROXY TCP4 %s %s %d %d\r\n", src4, dst4, sourcePort, destPort)
 	}
-	family := "TCP4"
-	if strings.Contains(sourceIP, ":") || strings.Contains(destIP, ":") {
-		family = "TCP6"
+	// Both endpoints must share a family; IPv4 is written IPv4-mapped.
+	return fmt.Sprintf("PROXY TCP6 %s %s %d %d\r\n", proxyProtocolV1IPv6Text(src), proxyProtocolV1IPv6Text(dst), sourcePort, destPort)
+}
+
+// net.IP.String prints IPv4-mapped addresses in dotted form, which is not a
+// valid TCP6 field.
+func proxyProtocolV1IPv6Text(ip net.IP) string {
+	if ip4 := ip.To4(); ip4 != nil {
+		return "::ffff:" + ip4.String()
 	}
-	return fmt.Sprintf("PROXY %s %s %s %d %d\r\n", family, sourceIP, destIP, sourcePort, destPort)
+	return ip.String()
 }
 
 type udpEntrySession struct {

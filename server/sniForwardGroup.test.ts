@@ -415,7 +415,8 @@ test("host failover SNI lifecycle preserves readiness, atomic saves, imports and
         assert.deepEqual(splitters[0].fxp.sniRoutes.map(route => route.sni), ["a.example.com", "b.example.com"]);
         shared.push(splitters[0].fxp);
       }
-      await assert.rejects(() => admin.create({ ...input, sourcePort: 18444, sni: "a.example.com" }), /SNI 域名.*冲突/);
+      // Domains are unique per entry host and port: the same port rejects it.
+      await assert.rejects(() => admin.create({ ...input, sni: "a.example.com" }), /SNI 域名.*冲突/);
       await assert.rejects(() => admin.create({ ...input, sni: null }), /SNI 分流规则.*占用/);
       for (const id of [1, 2]) await heartbeat(id, localRules(shared[id - 1]));
       await admin.delete({ id: created.id });

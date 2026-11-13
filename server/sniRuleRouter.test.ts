@@ -668,14 +668,11 @@ test("forward-chain SNI rules share one entry port and reject duplicate or mixed
         })),
         /SNI 域名 api\.example\.com 与规则.*sni-api.*冲突/,
       );
-      await assert.rejects(
-        () => caller.create(createInput({
-          name: "duplicate-api-other-port",
-          sourcePort: 18444,
-          sni: "api.example.com",
-          targetIp: "203.0.113.23",
-        })),
-        /SNI 域名 api\.example\.com 与规则.*sni-api.*冲突/,
+      // 域名唯一按「入口主机 + 入口端口」：另一个端口有自己的分流表，同名域名可用。
+      // 这里只做预检，18444 留给下面的普通规则；保存路径见 sniProxyProtocol.test.ts。
+      assert.deepEqual(
+        await caller.checkSni({ forwardGroupId: 12, sourcePort: 18444, sni: "api.example.com" }),
+        { ok: true, reason: null },
       );
       await assert.rejects(
         () => caller.create(createInput({ name: "plain-on-sni-port", sni: null, protocol: "tcp" })),
@@ -796,20 +793,23 @@ test("checkSni enforces domain-only validation, exclusions, and administrator ac
 
       const sniRule = await admin.create(createInput({ name: "sni", sourcePort: 18444, sni: "api.example.com" }));
 
-      // 换端口也算重复：域名唯一性以入口主机为范围。
-      const duplicate = await admin.checkSni({ forwardGroupId: 10, sourcePort: 18446, sni: "API.Example.COM." });
+      // 同一入口端口内重复（规范化后）仍然拒绝；换端口则是另一张分流表，允许。
+      const duplicate = await admin.checkSni({ forwardGroupId: 10, sourcePort: 18444, sni: "API.Example.COM." });
       assert.equal(duplicate.ok, false);
       assert.match(String(duplicate.reason || ""), /SNI 域名 api\.example\.com 与规则/);
+      assert.deepEqual(await admin.checkSni({ forwardGroupId: 10, sourcePort: 18446, sni: "API.Example.COM." }), { ok: true, reason: null });
 
       // 直接隧道的主入口是 3，但入口组还让主机 1 接收入站；转发链同样从主机 1 入站。
-      // 两种资源在主机 1 上共享入口范围，因此相同域名仍然必须被识别。
-      const crossResourceDuplicate = await admin.checkSni({ forwardGroupId: 10, sourcePort: 18447, sni: "shared.example.com" });
+      // 两种资源在主机 1 的同一入口端口上共享分流表，因此相同域名仍然必须被识别。
+      const crossResourceDuplicate = await admin.checkSni({ forwardGroupId: 10, sourcePort: 18500, sni: "shared.example.com" });
       assert.equal(crossResourceDuplicate.ok, false);
       assert.match(String(crossResourceDuplicate.reason || ""), /SNI 域名 shared\.example\.com 与规则.*tunnel-sni/);
       await assert.rejects(
-        () => admin.create(createInput({ name: "cross-resource-duplicate", sourcePort: 18447, sni: "shared.example.com" })),
+        () => admin.create(createInput({ name: "cross-resource-duplicate", sourcePort: 18500, sni: "shared.example.com" })),
         /SNI 域名 shared\.example\.com 与规则.*tunnel-sni/,
       );
+      // 跨资源但不同端口：各自的分流表互不影响。
+      assert.deepEqual(await admin.checkSni({ forwardGroupId: 10, sourcePort: 18447, sni: "shared.example.com" }), { ok: true, reason: null });
 
       // 编辑自己这条规则时不算与自己冲突。
       assert.deepEqual(

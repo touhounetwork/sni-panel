@@ -37,7 +37,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "3.9.0"
+var Version = "3.10.0"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -918,6 +918,9 @@ type localRuntimeRuleState struct {
 	MaxConnections          int      `json:"maxConnections,omitempty"`
 	MaxIPs                  int      `json:"maxIPs,omitempty"`
 	AccessScope             string   `json:"accessScope,omitempty"`
+	ProxyProtocolReceive    bool     `json:"proxyProtocolReceive,omitempty"`
+	ProxyProtocolSend       bool     `json:"proxyProtocolSend,omitempty"`
+	ProxyProtocolVersion    int      `json:"proxyProtocolVersion,omitempty"`
 	Protocol                string   `json:"protocol,omitempty"`
 	TransportVersion        string   `json:"transportVersion,omitempty"`
 	SNIRouteVersion         int64    `json:"sniRouteVersion,omitempty"`
@@ -2203,6 +2206,9 @@ func readLocalRuntimeStatePayload() localRuntimeStatePayload {
 					MaxConnections:          route.MaxConnections,
 					MaxIPs:                  route.MaxIPs,
 					AccessScope:             strings.TrimSpace(route.AccessScope),
+					ProxyProtocolReceive:    route.ProxyProtocolReceive,
+					ProxyProtocolSend:       route.ProxyProtocolSend,
+					ProxyProtocolVersion:    route.ProxyProtocolVersion,
 					Protocol:                "tcp",
 					TransportVersion:        spec.TransportVersion,
 					SNIRouteVersion:         routeVersion,
@@ -2780,6 +2786,10 @@ type fxpSpec struct {
 	RelayPeerID              string            `json:"relayPeerId,omitempty"`
 	RelayKey                 string            `json:"relayKey,omitempty"`
 	DNSGeneration            int               `json:"dnsGeneration,omitempty"`
+
+	// ProxyProtocolUDP mirrors forwardx-fxp config: apply the PROXY switches
+	// to UDP too (v2, one header per datagram).
+	ProxyProtocolUDP bool `json:"proxyProtocolUdp,omitempty"`
 }
 
 type fxpExitEndpoint struct {
@@ -2806,7 +2816,15 @@ type fxpSNIRoute struct {
 	MaxConnections int    `json:"maxConnections,omitempty"`
 	MaxIPs         int    `json:"maxIPs,omitempty"`
 	AccessScope    string `json:"accessScope,omitempty"`
+	// Mirrors forwardx-fxp sniRoute. Receive is listener-wide and carried on
+	// every route; the splitter rejects tables whose routes disagree.
+	ProxyProtocolReceive bool `json:"proxyProtocolReceive,omitempty"`
+	ProxyProtocolSend    bool `json:"proxyProtocolSend,omitempty"`
+	ProxyProtocolVersion int  `json:"proxyProtocolVersion,omitempty"`
 }
+
+// fxpSNIDefaultRoute mirrors sniDefaultRoute in forwardx-fxp.
+const fxpSNIDefaultRoute = "*"
 
 type protocolPolicy struct {
 	BlockHTTP  bool `json:"blockHttp"`
@@ -2847,6 +2865,7 @@ func main() {
 	}
 	configPath := flag.String("config", defaultConfigPath, "config file")
 	onceRegister := flag.Bool("register", false, "register and exit")
+	postInstall := flag.String("post-install", "", "run the panel's post-install command for install|upgrade and exit")
 	flag.Parse()
 
 	resolvedConfigPath, cfg, err := loadConfigWithFallback(*configPath)
@@ -2873,6 +2892,9 @@ func main() {
 			fatal("register: %v", err)
 		}
 		return
+	}
+	if *postInstall != "" {
+		os.Exit(runPostInstall(cfg, *postInstall, os.Stdout))
 	}
 	stateLock, err := acquireAgentStateLock(trafficStateDir)
 	if err != nil {
@@ -5045,6 +5067,8 @@ func runAgentEventStream(cfg Config) error {
 					} else if handlePanelMigrationDirective(cfg, &directive) {
 						return io.EOF
 					}
+				} else if msg.Type == "agent-command" || msg.Type == "agent-command-cancel" {
+					handleHostCommandEvent(cfg, msg.Type, msg.Data)
 				} else if msg.Type == "agent-support-bundle" {
 					var request supportBundleRequest
 					if err := json.Unmarshal(msg.Data, &request); err != nil {
@@ -9752,6 +9776,7 @@ func normalizeFXPSNIRoutes(routes []fxpSNIRoute) []fxpSNIRoute {
 		route.SNI = normalizeFXPSNIName(route.SNI)
 		route.TargetIP = strings.TrimSpace(route.TargetIP)
 		route.AccessScope = strings.TrimSpace(route.AccessScope)
+		route.ProxyProtocolVersion = normalizeFXPSNIRouteProxyProtocolVersion(route)
 		if index, exists := seen[route.SNI]; exists {
 			normalized[index] = route
 			continue
@@ -9766,6 +9791,15 @@ func normalizeFXPSNIRoutes(routes []fxpSNIRoute) []fxpSNIRoute {
 		return normalized[i].RuleID < normalized[j].RuleID
 	})
 	return normalized
+}
+
+// normalizeFXPSNIRouteProxyProtocolVersion mirrors
+// normalizeSNIRouteProxyProtocolVersion in forwardx-fxp/config.go.
+func normalizeFXPSNIRouteProxyProtocolVersion(route fxpSNIRoute) int {
+	if !route.ProxyProtocolSend {
+		return 0
+	}
+	return normalizeProxyProtocolVersion(route.ProxyProtocolVersion)
 }
 
 // normalizeFXPSNIName and normalizeFXPSourceAllowIPs must stay byte-identical
@@ -9869,6 +9903,10 @@ func fxpServerSignature(spec fxpSpec) string {
 			)
 		}
 	}
+	// Appended only when set so existing runtimes keep their signature.
+	if spec.ProxyProtocolUDP {
+		parts = append(parts, "proxy-protocol-udp")
+	}
 	// Preserve byte-identical V1/V2 signatures to avoid restarting legacy
 	// runtimes just because support for a new transport was installed.
 	if spec.TransportVersion == "v3" {
@@ -9902,6 +9940,11 @@ func fxpSNIRouteTableSignature(spec fxpSpec) string {
 			strconv.Itoa(route.MaxIPs),
 			strings.TrimSpace(route.AccessScope),
 		)
+		// Appended only when set so tables without PROXY keep their
+		// pre-3.10 signature and are not hot-swapped on upgrade.
+		if route.ProxyProtocolReceive || route.ProxyProtocolSend {
+			parts = append(parts, "pp", strconv.FormatBool(route.ProxyProtocolReceive), strconv.FormatBool(route.ProxyProtocolSend), strconv.Itoa(route.ProxyProtocolVersion))
+		}
 	}
 	return strings.Join(parts, "|")
 }
@@ -10043,7 +10086,10 @@ func validateFXPSNIRouteTable(spec fxpSpec) error {
 		if route.RuleID <= 0 {
 			return fmt.Errorf("sni-splitter route %d requires rule id", index)
 		}
-		if !validFXPSNIName(route.SNI) {
+		if route.ProxyProtocolReceive != spec.SNIRoutes[0].ProxyProtocolReceive {
+			return fmt.Errorf("sni-splitter route %d proxy protocol receive differs from the listener", index)
+		}
+		if route.SNI != fxpSNIDefaultRoute && !validFXPSNIName(route.SNI) {
 			return fmt.Errorf("sni-splitter route %d requires valid sni", index)
 		}
 		if strings.TrimSpace(route.TargetIP) == "" || !validActionPort(route.TargetPort) {
@@ -13910,6 +13956,16 @@ func readProxyProtocolMore(conn net.Conn, timeout time.Duration, limit int) ([]b
 }
 
 func consumeProxyProtocolV2(data []byte) (proxyProtocolInfo, []byte, bool, error) {
+	return parseProxyProtocolV2(data, false)
+}
+
+// consumeProxyProtocolV2Datagram mirrors forwardx-fxp: it accepts only the
+// UDP families (0x12, 0x22), while the stream parser rejects them.
+func consumeProxyProtocolV2Datagram(data []byte) (proxyProtocolInfo, []byte, bool, error) {
+	return parseProxyProtocolV2(data, true)
+}
+
+func parseProxyProtocolV2(data []byte, datagram bool) (proxyProtocolInfo, []byte, bool, error) {
 	if !bytes.HasPrefix(data, proxyProtocolV2Signature) {
 		return proxyProtocolInfo{}, data, false, nil
 	}
@@ -13934,19 +13990,24 @@ func consumeProxyProtocolV2(data []byte) (proxyProtocolInfo, []byte, bool, error
 	if command != 0x1 {
 		return proxyProtocolInfo{}, nil, false, errors.New("unsupported proxy protocol v2 command")
 	}
-	switch familyProtocol {
-	case 0x11:
+	if familyProtocol == 0x00 {
+		return proxyProtocolInfo{}, remaining, true, nil
+	}
+	transport := familyProtocol & 0x0f
+	if (transport == 0x2) != datagram || (transport != 0x1 && transport != 0x2) {
+		return proxyProtocolInfo{}, nil, false, errors.New("proxy protocol v2 transport does not match the connection")
+	}
+	switch familyProtocol >> 4 {
+	case 0x1:
 		if len(payload) < 12 {
-			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 tcp4 payload")
+			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 ipv4 payload")
 		}
 		return proxyProtocolInfo{SourceIP: net.IP(payload[0:4]).String(), DestIP: net.IP(payload[4:8]).String(), SourcePort: int(binary.BigEndian.Uint16(payload[8:10])), DestPort: int(binary.BigEndian.Uint16(payload[10:12]))}, remaining, true, nil
-	case 0x21:
+	case 0x2:
 		if len(payload) < 36 {
-			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 tcp6 payload")
+			return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol v2 ipv6 payload")
 		}
 		return proxyProtocolInfo{SourceIP: net.IP(payload[0:16]).String(), DestIP: net.IP(payload[16:32]).String(), SourcePort: int(binary.BigEndian.Uint16(payload[32:34])), DestPort: int(binary.BigEndian.Uint16(payload[34:36]))}, remaining, true, nil
-	case 0x00:
-		return proxyProtocolInfo{}, remaining, true, nil
 	default:
 		return proxyProtocolInfo{}, nil, false, errors.New("unsupported proxy protocol v2 address family")
 	}
@@ -13961,16 +14022,53 @@ func buildProxyProtocol(version int, info proxyProtocolInfo, fallbackSource net.
 
 func buildProxyProtocolV2(info proxyProtocolInfo, fallbackSource net.Addr, targetLocal net.Addr, targetRemote net.Addr) []byte {
 	sourceIP, destIP, sourcePort, destPort := proxyProtocolEndpointValues(info, fallbackSource, targetLocal, targetRemote)
-	src := net.ParseIP(sourceIP)
-	dst := net.ParseIP(destIP)
-	if src == nil || dst == nil || sourcePort <= 0 || destPort <= 0 {
+	return encodeProxyProtocolV2(net.ParseIP(sourceIP), net.ParseIP(destIP), sourcePort, destPort, false)
+}
+
+// buildProxyProtocolV2UDP mirrors formatProxyProtocolV2UDP in forwardx-fxp:
+// the header for one datagram, with the destination mapped into the source's
+// family so a wildcard listener never downgrades a real source to LOCAL.
+func buildProxyProtocolV2UDP(source, dest *net.UDPAddr) []byte {
+	if source == nil || source.IP == nil {
 		return buildProxyProtocolV2Local()
+	}
+	destIP := net.IPv4zero
+	destPort := 0
+	if dest != nil {
+		destPort = dest.Port
+		if dest.IP != nil && !dest.IP.IsUnspecified() {
+			destIP = dest.IP
+		}
+	}
+	if src4 := source.IP.To4(); src4 != nil {
+		if dst4 := destIP.To4(); dst4 != nil {
+			return encodeProxyProtocolV2(src4, dst4, source.Port, destPort, true)
+		}
+		return encodeProxyProtocolV2(src4, net.IPv4zero, source.Port, destPort, true)
+	}
+	if destIP.To4() != nil {
+		if destIP.Equal(net.IPv4zero) {
+			destIP = net.IPv6unspecified
+		} else {
+			destIP = destIP.To16()
+		}
+	}
+	return encodeProxyProtocolV2(source.IP.To16(), destIP.To16(), source.Port, destPort, true)
+}
+
+func encodeProxyProtocolV2(src, dst net.IP, sourcePort, destPort int, datagram bool) []byte {
+	if src == nil || dst == nil || sourcePort <= 0 || sourcePort > 65535 || destPort < 0 || destPort > 65535 || (!datagram && destPort <= 0) {
+		return buildProxyProtocolV2Local()
+	}
+	transport := byte(0x1)
+	if datagram {
+		transport = 0x2
 	}
 	if src4, dst4 := src.To4(), dst.To4(); src4 != nil && dst4 != nil {
 		buf := make([]byte, 28)
 		copy(buf, proxyProtocolV2Signature)
 		buf[12] = 0x21
-		buf[13] = 0x11
+		buf[13] = 0x10 | transport
 		binary.BigEndian.PutUint16(buf[14:16], 12)
 		copy(buf[16:20], src4)
 		copy(buf[20:24], dst4)
@@ -13980,13 +14078,15 @@ func buildProxyProtocolV2(info proxyProtocolInfo, fallbackSource net.Addr, targe
 	}
 	src16 := src.To16()
 	dst16 := dst.To16()
-	if src16 == nil || dst16 == nil || src.To4() != nil || dst.To4() != nil {
+	// TCP keeps its LOCAL fallback for mixed families; datagram callers have
+	// already mapped both endpoints into IPv6.
+	if src16 == nil || dst16 == nil || (!datagram && (src.To4() != nil || dst.To4() != nil)) {
 		return buildProxyProtocolV2Local()
 	}
 	buf := make([]byte, 52)
 	copy(buf, proxyProtocolV2Signature)
 	buf[12] = 0x21
-	buf[13] = 0x21
+	buf[13] = 0x20 | transport
 	binary.BigEndian.PutUint16(buf[14:16], 36)
 	copy(buf[16:32], src16)
 	copy(buf[32:48], dst16)

@@ -276,7 +276,7 @@ test("panel-first Agent upgrade falls back to GitHub without deleting SNI runtim
   const upgrade = scriptSection(script, "do_upgrade() {", "# ============ 入口 ============");
   const panelIndex = downloader.indexOf('URL="$(panel_asset_url "$RELEASE_VERSION" "$ASSET")"');
   const githubIndex = downloader.indexOf(
-    'URL="https://github.com/owo10086/sni-panel/releases/download/v${RELEASE_VERSION}/${ASSET}"',
+    'URL="https://github.com/touhounetwork/sni-panel/releases/download/v${RELEASE_VERSION}/${ASSET}"',
   );
 
   assert.match(script, /FORWARDX_AGENT_PANEL_FIRST_DEFAULT="true"/);
@@ -383,6 +383,14 @@ test("Managed systemd units receive bounded logging defaults idempotently", () =
   assert.match(hardened, /LogRateLimitIntervalSec=30s/);
   assert.match(hardened, /LogRateLimitBurst=200/);
   assert.equal(hardenManagedServiceUnit(hardened), hardened);
+});
+
+test("Forwarding service units lift the open file limit", () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "server/agentHeartbeatRoute.ts"), "utf8");
+  const limits = source.match(/"LimitNOFILE=[^"]*"/g) || [];
+  // runtime, tunnel runtime, nginx, realm/socat SNI entries, guarded backends and plain forwarders.
+  assert.equal(limits.length, 13);
+  assert.ok(limits.every((line) => line === '"LimitNOFILE=infinity"'), limits.join(", "));
 });
 
 test("Mimic installer provisions the NIC offload management dependency", () => {

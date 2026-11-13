@@ -18,7 +18,7 @@ const enabledAccelerator = {
 };
 
 test("builds a direct changelog URL unless panel update acceleration is fully enabled", () => {
-  const directUrl = "https://github.com/owo10086/sni-panel/releases/tag/v2.3.275";
+  const directUrl = "https://github.com/touhounetwork/sni-panel/releases/tag/v2.3.275";
 
   assert.equal(getPanelChangelogUrl("2.3.275"), directUrl);
   assert.equal(
@@ -36,7 +36,7 @@ test("builds a direct changelog URL unless panel update acceleration is fully en
 });
 
 test("accelerates generated and supplied GitHub release URLs", () => {
-  const releaseUrl = "https://github.com/owo10086/sni-panel/releases/tag/v2.3.275";
+  const releaseUrl = "https://github.com/touhounetwork/sni-panel/releases/tag/v2.3.275";
   const acceleratedUrl = `https://mirror.example.com/${releaseUrl}`;
 
   assert.equal(getPanelChangelogUrl("2.3.275", null, enabledAccelerator), acceleratedUrl);
@@ -44,7 +44,7 @@ test("accelerates generated and supplied GitHub release URLs", () => {
 });
 
 const targetVersion = "v3.3.1";
-const targetImage = "ghcr.io/owo10086/sni-panel:v3.3.1";
+const targetImage = "ghcr.io/touhounetwork/sni-panel:v3.3.1";
 
 function manualCommand(version = targetVersion) {
   return getDockerUpgradeCommand("manual", "installer-command-marker", version);
@@ -61,7 +61,7 @@ function runManualUpgrade(context: TestContext, options: { pullFails?: boolean; 
   const original = `name: custom-panel
 services:
   forwardx:
-    image: ${options.image || "ghcr.io/owo10086/sni-panel@sha256:old-version"}
+    image: ${options.image || "ghcr.io/touhounetwork/sni-panel@sha256:old-version"}
     container_name: forwardx-panel
     ports:
       - "443:3000"
@@ -73,7 +73,7 @@ services:
       POSTGRES_DB: panel
 `;
   fs.writeFileSync(composeFile, original, { mode: 0o600 });
-  fs.writeFileSync(path.join(directory, ".env"), "FORWARDX_IMAGE=ghcr.io/owo10086/sni-panel:v3.3.0\n");
+  fs.writeFileSync(path.join(directory, ".env"), "FORWARDX_IMAGE=ghcr.io/touhounetwork/sni-panel:v3.3.0\n");
   const log = path.join(root, "calls.jsonl");
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}\n` + String.raw`
 const fs = require("node:fs");
@@ -97,7 +97,7 @@ if (args[0] === "inspect") {
   if (args.includes("config")) console.log(image);
   else if (args.includes("up")) {
     if (path.resolve(filename) !== path.join(process.env.PROBE_DIRECTORY, "docker-compose.yml")) process.exit(92);
-    if (image !== "ghcr.io/owo10086/sni-panel:v3.3.1") process.exit(93);
+    if (image !== "ghcr.io/touhounetwork/sni-panel:v3.3.1") process.exit(93);
   } else process.exit(94);
 } else if (args[0] === "exec") {
   console.log(process.env.PROBE_RUNNING_VERSION);
@@ -125,13 +125,13 @@ if (args[0] === "inspect") {
 test("manual upgrade replaces the pinned image in the existing deployment and verifies the running version", (context) => {
   const { result, original, directory, composeFile, calls } = runManualUpgrade(context);
   assert.equal(result.status, 0, result.stderr);
-  const expected = original.replace("ghcr.io/owo10086/sni-panel@sha256:old-version", targetImage);
+  const expected = original.replace("ghcr.io/touhounetwork/sni-panel@sha256:old-version", targetImage);
   assert.equal(fs.readFileSync(composeFile, "utf8"), expected);
   assert.equal(fs.statSync(composeFile).mode & 0o777, 0o600);
   const backups = fs.readdirSync(directory).filter((name) => name.startsWith("docker-compose.yml.bak-"));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(directory, backups[0]), "utf8"), original);
-  assert.equal(fs.readFileSync(path.join(directory, ".env"), "utf8"), "FORWARDX_IMAGE=ghcr.io/owo10086/sni-panel:v3.3.0\n");
+  assert.equal(fs.readFileSync(path.join(directory, ".env"), "utf8"), "FORWARDX_IMAGE=ghcr.io/touhounetwork/sni-panel:v3.3.0\n");
   assert.deepEqual(calls.find((args) => args[0] === "pull"), ["pull", targetImage]);
   const start = calls.find((args) => args[0] === "compose" && args.includes("up"));
   assert.ok(start?.includes("--no-deps"));
@@ -144,7 +144,7 @@ test("manual upgrade replaces the pinned image in the existing deployment and ve
 test("manual upgrade also replaces an image supplied by an old .env setting", (context) => {
   const { result, composeFile } = runManualUpgrade(context, { image: "${FORWARDX_IMAGE}" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(fs.readFileSync(composeFile, "utf8"), /image: ghcr\.io\/owo10086\/sni-panel:v3\.3\.1/);
+  assert.match(fs.readFileSync(composeFile, "utf8"), /image: ghcr\.io\/touhounetwork\/sni-panel:v3\.3\.1/);
 });
 
 test("a failed image download leaves the original configuration and running container untouched", (context) => {
@@ -161,7 +161,7 @@ test("manual upgrade fails if the recreated container still reports the old vers
 });
 
 test("manual command uses the detected target version and rejects missing or unsafe versions", () => {
-  assert.match(manualCommand("v3.4.2"), /ghcr\.io\/owo10086\/sni-panel:v3\.4\.2/);
+  assert.match(manualCommand("v3.4.2"), /ghcr\.io\/touhounetwork\/sni-panel:v3\.4\.2/);
   assert.equal(manualCommand("3.4.2"), manualCommand("v3.4.2"));
   for (const version of ["", "latest", "v3.3.1;touch /tmp/unsafe", "v3.3.1\nwhoami"]) {
     assert.equal(manualCommand(version), "");

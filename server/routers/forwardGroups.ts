@@ -18,7 +18,6 @@ import {
 } from "../services/forwardGroupService";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { EXIT_GROUP_STRATEGIES } from "../../shared/exitStrategy";
-import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
 import { portForwardToolPreflight } from "../portForwardToolPreflight";
 import { appendPanelLog } from "../_core/panelLogger";
 import { getLinkAccessScope, visibleForwardGroupMemberIds, type LinkAccessScope } from "../linkAccessView";
@@ -66,7 +65,7 @@ const baseSchema = z.object({
   udpOverTcpPort: z.number().int().min(0).max(65535).nullable().optional(),
   failoverEnabled: z.boolean().optional(),
   failoverStrategy: failoverStrategySchema.optional(),
-  failoverTargets: z.array(failoverTargetSchema).max(10).optional(),
+  failoverTargets: z.array(failoverTargetSchema).optional(),
   domain: z.string().max(255).nullable().optional(),
   recordType: z.enum(["A", "AAAA", "CNAME"]).default("A"),
   failoverSeconds: z.number().int().min(10).max(3600).default(60),
@@ -79,7 +78,7 @@ const baseSchema = z.object({
   ddnsAutoResolveEnabled: z.boolean().default(true),
   autoFailback: z.boolean().default(true),
   isEnabled: z.boolean().default(true),
-  members: z.array(memberSchema).max(MAX_FORWARD_GROUP_MEMBERS),
+  members: z.array(memberSchema),
 });
 
 async function assertForwardGroupAccess(
@@ -121,7 +120,7 @@ function availabilityIndexForGroups(groups: any[], supportingGroups: any[] = [])
 export const forwardGroupsRouter = router({
   toolPreflight: adminProcedure.input(z.object({
     entryGroupId:z.number().int().positive().nullable().optional(),
-    hostIds:z.array(z.number().int().positive()).max(MAX_FORWARD_GROUP_MEMBERS).default([]),
+    hostIds:z.array(z.number().int().positive()).default([]),
     forwardType:z.enum(["iptables","nftables","realm","socat","gost","nginx"]),
   })).query(async ({input}) => {
     const entry = input.entryGroupId ? await db.getForwardGroupById(input.entryGroupId) as any : null;

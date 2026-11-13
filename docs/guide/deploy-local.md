@@ -7,7 +7,7 @@
 使用 root 执行；非 root 将管道后的 bash 替换为 sudo bash。
 
 ~~~bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- install --language zh-CN
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- install --language zh-CN
 ~~~
 
 脚本使用 Node.js 22 或更高版本、pnpm，下载 GitHub Release 中的面板包并安装生产依赖。按提示选择访问端口和数据库，再在网页完成初始化。
@@ -59,7 +59,7 @@ sudo systemctl restart forwardx-panel
 已有新版管理命令时使用 `fwxm panel upgrade`；旧版可执行：
 
 ~~~bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
 ~~~
 
 脚本下载并安装发布包，保留 data 中的数据库和业务配置。它会重写 .env 并保留所识别的核心项，不保证保留所有手动新增环境变量；升级前备份并核对自定义项。
@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/ins
 
 ## 手动维护发布包
 
-如果确实需要自行维护服务，在 [GitHub Releases](https://github.com/owo10086/sni-panel/releases) 下载目标版本的 forwardx-panel-v版本.tar.gz，不要将源码压缩包当成生产包。
+如果确实需要自行维护服务，在 [GitHub Releases](https://github.com/touhounetwork/sni-panel/releases) 下载目标版本的 forwardx-panel-v版本.tar.gz，不要将源码压缩包当成生产包。
 
 发布包包含 dist、client/dist、drizzle、patches、package.json、pnpm 锁文件和安装/迁移脚本。自行维护时需要：
 

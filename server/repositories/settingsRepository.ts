@@ -1,7 +1,7 @@
 ﻿import { eq } from "drizzle-orm";
 import { systemSettings } from "../../drizzle/schema";
 import { inArray } from "drizzle-orm";
-import { executeRaw, getDatabaseKind, getDb } from "../dbRuntime";
+import { executeRaw, getDatabaseKind, getDb, isDatabaseTransactionActive } from "../dbRuntime";
 
 // ==================== System Settings (key-value) ====================
 
@@ -45,6 +45,13 @@ export async function getSettings(keys: string[]): Promise<Record<string, string
   return values;
 }
 
+async function readAllSettings(db: NonNullable<Awaited<ReturnType<typeof getDb>>>) {
+  const rows: Array<{ key: string; value: string | null }> = await db.select().from(systemSettings);
+  const values: Record<string, string | null> = {};
+  for (const row of rows) values[row.key] = row.value ?? null;
+  return values;
+}
+
 /** 批量读取所有系统设置 */
 export async function getAllSettings(): Promise<Record<string, string | null>> {
   const db = await getDb();
@@ -54,13 +61,16 @@ export async function getAllSettings(): Promise<Record<string, string | null>> {
   if (cached && cached.db === db && cached.expiresAt > now) {
     return { ...cached.values };
   }
+  // A SQLite transaction holds the only connection, and a load started
+  // outside it is queued behind that transaction: joining it would deadlock.
+  // Reads inside a transaction may also see uncommitted values, so they
+  // neither join nor publish the shared load or cache.
+  if (isDatabaseTransactionActive()) return readAllSettings(db);
   const activeLoad = allSettingsLoad;
   if (activeLoad && activeLoad.db === db) return { ...await activeLoad.promise };
 
   const generation = allSettingsGeneration;
-  const promise = db.select().from(systemSettings).then((rows: Array<{ key: string; value: string | null }>) => {
-    const values: Record<string, string | null> = {};
-    for (const row of rows) values[row.key] = row.value ?? null;
+  const promise = readAllSettings(db).then((values) => {
     if (generation === allSettingsGeneration) {
       allSettingsCache = { db, expiresAt: Date.now() + ALL_SETTINGS_CACHE_TTL_MS, values };
     }

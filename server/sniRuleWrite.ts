@@ -69,8 +69,9 @@ async function readWriteRoute(ruleId: number | undefined, input: RuleRoute, incl
   };
 }
 
-// Per-host ordering also covers different resources and different ports: the
-// SNI domain namespace belongs to the actual host, not to a resource or port.
+// Per-host ordering also covers different resources and different ports. The
+// SNI domain namespace is (host, entry port); ordering per host is a superset
+// of that and also serializes the per-port PROXY receive synchronization.
 // includePlain lets ordinary creates/imports share this ordering for ports,
 // member changes and mixed batches; existing SNI updates keep their old gate.
 export async function withSniRuleWrite<T>(ruleId: number | undefined, input: RuleRoute, save: () => Promise<T>, options: { includePlain?: boolean } = {}): Promise<T> {

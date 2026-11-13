@@ -126,8 +126,11 @@ func validateConfig(cfg config) error {
 			return errors.New("entry requires target host and port")
 		}
 	}
-	if (cfg.ProxyProtocolReceive || cfg.ProxyProtocolSend || cfg.ProxyProtocolExitReceive || cfg.ProxyProtocolExitSend) && cfg.Protocol == "udp" {
+	if (cfg.ProxyProtocolReceive || cfg.ProxyProtocolSend || cfg.ProxyProtocolExitReceive || cfg.ProxyProtocolExitSend) && cfg.Protocol == "udp" && !cfg.ProxyProtocolUDP {
 		return errors.New("proxy protocol requires tcp protocol")
+	}
+	if cfg.ProxyProtocolUDP && normalizeProxyProtocolVersion(cfg.ProxyProtocolVersion) != 2 {
+		return errors.New("udp proxy protocol requires version 2")
 	}
 	if cfg.Role == "relay" {
 		if cfg.RelayExitHost == "" || cfg.RelayExitPort <= 0 || cfg.RelayExitPort > 65535 || cfg.RelayKey == "" {
@@ -147,6 +150,7 @@ func normalizeSNIRoutes(routes []sniRoute) []sniRoute {
 		route.SNI = normalizeSNIName(route.SNI)
 		route.TargetIP = strings.TrimSpace(route.TargetIP)
 		route.AccessScope = strings.TrimSpace(route.AccessScope)
+		route.ProxyProtocolVersion = normalizeSNIRouteProxyProtocolVersion(route)
 		if index, exists := seen[route.SNI]; exists {
 			normalized[index] = route
 			continue
@@ -161,6 +165,16 @@ func normalizeSNIRoutes(routes []sniRoute) []sniRoute {
 		return normalized[i].RuleID < normalized[j].RuleID
 	})
 	return normalized
+}
+
+// normalizeSNIRouteProxyProtocolVersion keeps the version meaningful only
+// when the route sends a header, so an unused version never reads as drift.
+// Mirrored in the Agent as normalizeFXPSNIRouteProxyProtocolVersion.
+func normalizeSNIRouteProxyProtocolVersion(route sniRoute) int {
+	if !route.ProxyProtocolSend {
+		return 0
+	}
+	return normalizeProxyProtocolVersion(route.ProxyProtocolVersion)
 }
 
 // normalizeSNIName and normalizeSourceAllowIPs are mirrored in the Agent as
@@ -212,7 +226,10 @@ func validateSNISplitterConfig(cfg config) error {
 		if route.RuleID <= 0 {
 			return fmt.Errorf("sni-splitter route %d requires rule id", i)
 		}
-		if !validSNIName(route.SNI) {
+		if route.ProxyProtocolReceive != cfg.SNIRoutes[0].ProxyProtocolReceive {
+			return fmt.Errorf("sni-splitter route %d proxy protocol receive differs from the listener", i)
+		}
+		if route.SNI != sniDefaultRoute && !validSNIName(route.SNI) {
 			return fmt.Errorf("sni-splitter route %d requires valid sni", i)
 		}
 		if route.TargetIP == "" || route.TargetPort <= 0 || route.TargetPort > 65535 {

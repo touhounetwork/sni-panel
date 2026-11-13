@@ -5,6 +5,9 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import * as db from "../db";
+import { cancelHostCommand, countHostCommandBatches, getHostCommandBatch, listHostCommandBatches, runHostCommandBatch } from "../hostCommands";
+import { HOST_COMMAND_MAX_COMMAND_BYTES, HOST_COMMAND_MAX_TIMEOUT_SECONDS, HOST_COMMAND_MIN_TIMEOUT_SECONDS } from "../../shared/hostCommands";
+import { getGlobalInstallHookCommand, getHostInstallHook, INSTALL_HOOK_MAX_COMMAND_BYTES, INSTALL_HOOK_MODES, saveGlobalInstallHookCommand, saveHostInstallHook } from "../hostInstallHooks";
 import { notificationSettings } from "../notificationSettings";
 import { appendPanelLog } from "../_core/panelLogger";
 import { markHostMetricsWatching, pushAgentRefresh, pushAgentUpgrade } from "../agentEvents";
@@ -105,7 +108,7 @@ const hostProbeServiceInputSchema = z.object({
 }).merge(urlProbeOptionsSchema);
 const hostGroupInputSchema = z.object({
   name: z.string().trim().min(1).max(128),
-  hostIds: z.array(z.number().int().positive()).max(500).optional(),
+  hostIds: z.array(z.number().int().positive()).optional(),
   isEnabled: z.boolean().optional(),
   sortOrder: z.number().int().min(0).max(200).optional(),
 });
@@ -603,8 +606,8 @@ function scheduleOrphanedAgentHostCleanup() {
 
 export const hostsRouter = router({
   managementCounts: adminProcedure.query(async () => {
-    const [counts, alerts] = await Promise.all([db.getHostManagementCounts(), getResourceAlertServices()]);
-    return { ...counts, services: counts.services + alerts.length };
+    const [counts, alerts, commands] = await Promise.all([db.getHostManagementCounts(), getResourceAlertServices(), countHostCommandBatches()]);
+    return { ...counts, services: counts.services + alerts.length, commands };
   }),
   resourceAlertServices: adminProcedure.query(() => getResourceAlertServices()),
   saveResourceAlertService: adminProcedure.input(z.object({ id: z.string().min(1).max(64).optional(), service: resourceAlertServiceSchema })).mutation(async ({ input }) => {
@@ -623,6 +626,41 @@ export const hostsRouter = router({
       if (error instanceof RangeError) throw new TRPCError({ code: "NOT_FOUND", message: error.message });
       throw error;
     }
+  }),
+  runCommand: adminProcedure.input(z.object({
+    hostIds: z.array(z.number().int().positive()).min(1),
+    command: z.string().max(HOST_COMMAND_MAX_COMMAND_BYTES * 4),
+    timeoutSeconds: z.number().int().min(HOST_COMMAND_MIN_TIMEOUT_SECONDS).max(HOST_COMMAND_MAX_TIMEOUT_SECONDS),
+  })).mutation(async ({ input, ctx }) => {
+    try {
+      return await runHostCommandBatch({ ...input, actor: { id: Number(ctx.user.id), name: String((ctx.user as any).name || ctx.user.username || "") } });
+    } catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : String(error) }); }
+  }),
+  commandBatch: adminProcedure.input(z.object({ batchId: z.number().int().positive() })).query(async ({ input }) => {
+    const batch = await getHostCommandBatch(input.batchId);
+    if (!batch) throw new TRPCError({ code: "NOT_FOUND", message: "批次不存在或已过期" });
+    return batch;
+  }),
+  commandBatches: adminProcedure.query(() => listHostCommandBatches(100)),
+  cancelCommand: adminProcedure.input(z.object({ batchId: z.number().int().positive(), hostId: z.number().int().positive().optional() }))
+    .mutation(({ input }) => cancelHostCommand(input.batchId, input.hostId)),
+  installHook: adminProcedure.input(z.object({ hostId: z.number().int().positive() })).query(async ({ input }) => {
+    if (!await db.getHostById(input.hostId)) throw new TRPCError({ code: "NOT_FOUND", message: "主机不存在" });
+    return getHostInstallHook(input.hostId);
+  }),
+  saveInstallHook: adminProcedure.input(z.object({
+    hostId: z.number().int().positive(),
+    mode: z.enum(INSTALL_HOOK_MODES),
+    command: z.string().max(INSTALL_HOOK_MAX_COMMAND_BYTES * 4),
+  })).mutation(async ({ input }) => {
+    if (!await db.getHostById(input.hostId)) throw new TRPCError({ code: "NOT_FOUND", message: "主机不存在" });
+    try { return await saveHostInstallHook(input.hostId, input); }
+    catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : String(error) }); }
+  }),
+  globalInstallHook: adminProcedure.query(async () => ({ command: await getGlobalInstallHookCommand() })),
+  saveGlobalInstallHook: adminProcedure.input(z.object({ command: z.string().max(INSTALL_HOOK_MAX_COMMAND_BYTES * 4) })).mutation(async ({ input }) => {
+    try { return await saveGlobalInstallHookCommand(input.command); }
+    catch (error) { throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : String(error) }); }
   }),
   resourceAlertSettings: adminProcedure.input(z.object({ hostId: z.number().int().positive() })).query(async ({ input }) => {
     if (!await db.getHostById(input.hostId)) throw new TRPCError({ code: "NOT_FOUND", message: "主机不存在" });

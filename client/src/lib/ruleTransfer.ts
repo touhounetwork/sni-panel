@@ -4,7 +4,7 @@ import {
   type ForwardRuleProtocol,
   type ForwardType,
 } from "@shared/forwardTypes";
-import { isValidSniValue, normalizeSniValue } from "@shared/sni";
+import { isValidSniRuleValue, normalizeSniValue } from "@shared/sni";
 import { z } from "zod";
 
 export const RULE_TRANSFER_FILE_KIND = "forwardx.forward-rules";
@@ -176,7 +176,7 @@ const ruleTransferRuleSchema = z.object({
   protocol: z.enum(["tcp", "udp", "both"]).optional().default("both"),
   sourcePort: z.number().int().min(0).max(65535),
   sni: z.string().trim().max(1024).refine(
-    (value) => !value || isValidSniValue(normalizeSniValue(value)),
+    (value) => !value || isValidSniRuleValue(normalizeSniValue(value)),
     () => ({ message: translateText("SNI 域名格式不正确") }),
   ).optional(),
   rateLimitMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
@@ -334,7 +334,7 @@ function parseSniBulkImportLine(line: string, lineNumber: number, sourcePort: nu
   if (nameRaw.length > 128) return { ok: false, message: translateText("第 {0} 行：规则名不能超过 128 个字符", [lineNumber]) };
   const sni = normalizeSniImportDomain(sniRaw);
   if (!sni) return { ok: false, message: translateText("第 {0} 行：SNI 域名不能为空", [lineNumber]) };
-  if (!isValidSniValue(sni)) return { ok: false, message: translateText("第 {0} 行：SNI 域名格式不正确", [lineNumber]) };
+  if (!isValidSniRuleValue(sni)) return { ok: false, message: translateText("第 {0} 行：SNI 域名格式不正确", [lineNumber]) };
   const targetIsBracketed = targetIpRaw.startsWith("[") && targetIpRaw.endsWith("]");
   const targetIp = targetIsBracketed ? targetIpRaw.slice(1, -1).trim() : targetIpRaw;
   if (targetIp.includes(":") && !targetIsBracketed) {

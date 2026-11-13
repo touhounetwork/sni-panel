@@ -1,5 +1,6 @@
 import { MYSQL_COMPATIBILITY_FLAGS } from "./mysqlCompatibility";
 import { displayQueries } from "./displayQueryCache";
+import { setQueryCacheIsolationCheck } from "./queryCache";
 import fs from "fs";
 import path from "path";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -722,6 +723,7 @@ export async function getDb() {
 export function isDatabaseTransactionActive() {
   return !!transactionContext.getStore();
 }
+setQueryCacheIsolationCheck(isDatabaseTransactionActive);
 
 export async function afterDatabaseCommit(work: () => Promise<void> | void) {
   const active = transactionContext.getStore();

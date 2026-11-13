@@ -10,7 +10,7 @@ import {
   requireTunnelUseOrTrafficBillingAccess,
 } from "./helpers";
 import { combineHostPortPolicyWithRange, combinePortPolicies, describePortPolicy, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "../portPolicy";
-import { isValidSniValue, normalizeSniValue } from "@shared/sni";
+import { isValidSniRuleValue, normalizeSniValue } from "@shared/sni";
 import {
   assertDirectTunnelSniEntryPortUse,
   assertSniEntryPortCanUseSni,
@@ -19,7 +19,9 @@ import {
   sniEntryPortConflictReason,
   type ForwardRuleConflictTarget,
 } from "../sniEntryPort";
-import { assertSniEntryAgentVersions } from "../sniEntryPortOverview";
+import { assertSniEntryAgentVersions, getSniEntryHostVersionStatuses } from "../sniEntryPortOverview";
+import { getSniPortProxyState, isSniProxyProtocolGroupMode } from "../sniProxyProtocol";
+import { isSniProxyProtocolAgentVersionSupported, SNI_PROXY_PROTOCOL_MIN_AGENT_VERSION } from "@shared/sni";
 
 const randomPortInputSchema = z.object({
   userId: z.number().int().positive().optional(),
@@ -167,7 +169,7 @@ export const portsRulesRouter = router({
         await requireRuleAccess(ownerContext, input.excludeRuleId);
       }
       const normalizedSni = normalizeSniValue(input.sni);
-      if (normalizedSni && (!isValidSniValue(normalizedSni) || actor.role !== "admin")) {
+      if (normalizedSni && (!isValidSniRuleValue(normalizedSni) || actor.role !== "admin")) {
         return { used: true, reason: "SNI 域名格式不正确或当前账号无权配置" };
       }
       const excludeRuleIds = await resolveExcludeRuleIds(input.excludeRuleId);
@@ -263,6 +265,33 @@ export const portsRulesRouter = router({
     }),
   // SNI 分流规则不做端口探测（同组规则共用入口端口是设计本身，探测只会误报），
   // 需要前置反馈的只有域名维度：同一台入口主机上完整域名唯一，跨端口、跨承载资源都算重复。
+  // 表单据此预填端口级「接收 PROXY」并说明会同步的规则数；保存时服务端重新判定。
+  sniPortProxyState: protectedProcedure
+    .input(z.object({
+      forwardGroupId: z.number().int().positive(),
+      sourcePort: z.number().int().min(1).max(65535),
+      excludeRuleId: z.number().int().positive().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin") return { supported: false, reason: "SNI 分流仅管理员可配置", receive: null, siblingRuleCount: 0 };
+      await requireForwardGroupPortAccess(ctx, input.forwardGroupId);
+      const group = await db.getForwardGroupById(input.forwardGroupId);
+      if (!isSniProxyProtocolGroupMode((group as any)?.groupMode)) {
+        return { supported: false, reason: "SNI 分流的 PROXY Protocol 仅支持端口转发资源和主机型转发组", receive: null, siblingRuleCount: 0 };
+      }
+      const entryHostIds = await db.getForwardGroupRuleEntryHostIds(input.forwardGroupId);
+      const unsupported = (await getSniEntryHostVersionStatuses(entryHostIds))
+        .find((status) => !isSniProxyProtocolAgentVersionSupported(status.agentVersion));
+      const state = await getSniPortProxyState({
+        entryHostIds,
+        sourcePort: input.sourcePort,
+        excludeRuleIds: await resolveExcludeRuleIds(input.excludeRuleId),
+      });
+      const reason = unsupported
+        ? `入口 Agent「${unsupported.name}」版本 ${unsupported.agentVersion || "未上报"} 不足，需要 ${SNI_PROXY_PROTOCOL_MIN_AGENT_VERSION} 或更高版本`
+        : state.chainShared ? "该入口端口与转发链共用分流器，不能接收 PROXY Protocol" : null;
+      return { supported: !unsupported, reason, receive: state.receive, siblingRuleCount: state.templateRuleIds.length, chainShared: state.chainShared };
+    }),
   checkSni: protectedProcedure
     .input(z.object({
       userId: z.number().int().positive().optional(),
@@ -284,7 +313,7 @@ export const portsRulesRouter = router({
       else await requireHostUseAccess(ownerContext, Number(input.hostId));
       const normalizedSni = normalizeSniValue(input.sni);
       if (!normalizedSni) return { ok: true, reason: null };
-      if (!isValidSniValue(normalizedSni)) return { ok: false, reason: "SNI 域名格式不正确" };
+      if (!isValidSniRuleValue(normalizedSni)) return { ok: false, reason: "SNI 域名格式不正确" };
       if (input.excludeRuleId) {
         await requireRuleAccess(ctx, input.excludeRuleId);
       }

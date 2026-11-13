@@ -5,11 +5,11 @@
 Manage port forwarding, encrypted tunnels, users, plans and failover across Linux servers through lightweight Agents. The panel manages configuration; the forwarding programs on managed hosts carry business traffic. The panel does not store host SSH keys.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/owo10086/sni-panel?display_name=tag&sort=semver)](https://github.com/owo10086/sni-panel/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/touhounetwork/sni-panel?display_name=tag&sort=semver)](https://github.com/touhounetwork/sni-panel/releases/latest)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-[Documentation](https://owo10086.github.io/sni-panel/) · [Downloads](https://github.com/owo10086/sni-panel/releases/latest) · [English changelog](CHANGELOG.en.md) · [中文更新日志](CHANGELOG.md) · [Telegram Group](https://t.me/ForwardX_panel)
+[Documentation](https://touhounetwork.github.io/sni-panel/) · [Downloads](https://github.com/touhounetwork/sni-panel/releases/latest) · [English changelog](CHANGELOG.en.md) · [中文更新日志](CHANGELOG.md) · [Telegram Group](https://t.me/ForwardX_panel)
 
 ## Documentation map
 
@@ -29,7 +29,7 @@ Most detailed guides are in Chinese. English guides cover [Agent proxies](docs/g
 - User permissions, rule quotas, plans, balances, payment integrations, billing pagination, affiliates and support tickets.
 - Chinese/English interfaces, optional Google sign-in, AI-assisted confirmed operations, email and Telegram/Discord notifications.
 
-Panel **3.5.1** adds a dedicated SNI rule group category, excludes SNI from ordinary All results, and places missing-domain warnings below the relevant group header. Improve resource details, traffic details, the More menu and inline latency retesting while preserving entry health, DDNS, billing and permissions. Agent/FXP remain at 3.5.0, so upgrading from 3.5.0 requires only the panel update. Older installations still need the matching runtime upgrades described in the compatibility notes. Published assets are available from [this project's Release](https://github.com/owo10086/sni-panel/releases/tag/v3.5.1). See [version and compatibility notes](docs/guide/releases.md).
+Panel **3.5.1** adds a dedicated SNI rule group category, excludes SNI from ordinary All results, and places missing-domain warnings below the relevant group header. Improve resource details, traffic details, the More menu and inline latency retesting while preserving entry health, DDNS, billing and permissions. Agent/FXP remain at 3.5.0, so upgrading from 3.5.0 requires only the panel update. Older installations still need the matching runtime upgrades described in the compatibility notes. Published assets are available from [this project's Release](https://github.com/touhounetwork/sni-panel/releases/tag/v3.5.1). See [version and compatibility notes](docs/guide/releases.md).
 
 ## Deployment
 
@@ -40,15 +40,15 @@ Run as root, or replace the Bash command after the pipe with `sudo bash`. The de
 ### Docker Compose
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language en
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language en
 ```
 
-Default directory: `/opt/forwardx-docker`; container: `forwardx-panel`; container port: `3000`. The installer selects and verifies an image from `ghcr.io/owo10086/sni-panel`. Data and database configuration live in the deployment directory's `forwardx-data/`, mounted at `/data`. Older deployments may use named volumes; inspect the actual mounts before backup or removal. Upgrades copy supported legacy-volume contents to the directory.
+Default directory: `/opt/forwardx-docker`; container: `forwardx-panel`; container port: `3000`. The installer selects and verifies an image from `ghcr.io/touhounetwork/sni-panel`. Data and database configuration live in the deployment directory's `forwardx-data/`, mounted at `/data`. Older deployments may use named volumes; inspect the actual mounts before backup or removal. Upgrades copy supported legacy-volume contents to the directory.
 
 ### Linux local installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- install --language en
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- install --language en
 ```
 
 Default directory: `/opt/forwardx-panel`; data: `/opt/forwardx-panel/data`; service: `forwardx-panel`. The installer prepares Node.js 22+ and pnpm and installs a Release bundle. Systemd, OpenRC and SysV installations are supported.
@@ -66,7 +66,7 @@ Installers preserve data and recognized core settings during upgrades but regene
 Example, replacing the panel URL and Token:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh -o /tmp/forwardx-install-agent.sh
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh -o /tmp/forwardx-install-agent.sh
 PANEL_URL='https://panel.example.com' bash /tmp/forwardx-install-agent.sh install YOUR_AGENT_TOKEN
 ```
 
@@ -93,7 +93,7 @@ Downloading the bootstrap and running the installer are separate stages. Configu
 
 ```bash
 curl --proxy 'socks5h://127.0.0.1:1080' -fsSL \
-  https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh \
+  https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh \
   -o /tmp/forwardx-install-agent.sh
 PANEL_URL='https://panel.example.com' bash /tmp/forwardx-install-agent.sh \
   install YOUR_AGENT_TOKEN --proxy 'socks5h://127.0.0.1:1080'
@@ -114,9 +114,9 @@ For script-managed installations without the manager, use the matching installer
 
 ```bash
 # Docker panel
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
 # Local panel
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
 ```
 
 Do not apply default installers blindly to manual deployments. Keep a matching database/configuration backup; replacing a binary alone is not a safe rollback after database changes. Full backups include optional operations history; essential backups can omit it. Affiliate records and probe counters retain the local restore protections.
@@ -134,7 +134,7 @@ Common defaults are listed below. Local installers can override paths; Docker en
 | `SQLITE_PATH` | `/data/forwardx.db` | SQLite file |
 | `DATABASE_TYPE` / `DB_TYPE` | Empty | Force SQLite, MySQL or PostgreSQL |
 | `JWT_SECRET` | Generated and persisted | Login signing secret |
-| `FORWARDX_IMAGE` | `ghcr.io/owo10086/sni-panel:latest` | Docker image |
+| `FORWARDX_IMAGE` | `ghcr.io/touhounetwork/sni-panel:latest` | Docker image |
 
 See [environment variables](docs/guide/env-vars.md) for complete settings. Language follows setup/browser hints unless manually selected; manual language changes are remembered in the current browser.
 
@@ -169,10 +169,10 @@ ForwardX Agent includes the third-party userspace WireGuard implementation under
 
 ## Star history
 
-<a href="https://star-history.com/#owo10086/sni-panel&amp;Date">
+<a href="https://star-history.com/#touhounetwork/sni-panel&amp;Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=owo10086/sni-panel&amp;type=Date&amp;theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=owo10086/sni-panel&amp;type=Date" />
-    <img alt="sni-panel Star History" src="https://api.star-history.com/svg?repos=owo10086/sni-panel&amp;type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=touhounetwork/sni-panel&amp;type=Date&amp;theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=touhounetwork/sni-panel&amp;type=Date" />
+    <img alt="sni-panel Star History" src="https://api.star-history.com/svg?repos=touhounetwork/sni-panel&amp;type=Date" />
   </picture>
 </a>

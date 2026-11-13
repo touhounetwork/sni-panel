@@ -8,7 +8,7 @@ import { createManifest, requiredFiles, validateManifest, publish, transfer, fin
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'release-faults-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const identity = { commit: 'a'.repeat(40), version: '3.5.2', agentVersion: '3.5.0', fxpVersion: '3.5.0', image: `ghcr.io/owo10086/sni-panel@sha256:${'b'.repeat(64)}` };
+  const identity = { commit: 'a'.repeat(40), version: '3.5.2', agentVersion: '3.5.0', fxpVersion: '3.5.0', image: `ghcr.io/touhounetwork/sni-panel@sha256:${'b'.repeat(64)}` };
   for (const file of requiredFiles(identity.version)) fs.writeFileSync(path.join(directory, file), file);
   const records = [...Object.keys(groups), 'bundle', 'image'].map(group => ({ group, commit: identity.commit, status: 'passed', sourceClean: true, image: identity.image, environment: { node: baseline.node, pnpm: baseline.pnpm, go: `${baseline.go} linux/amd64`, os: 'ID=ubuntu\nVERSION_ID="24.04"' }, commands: (groups[group] || []).map(args => ({ args, status: 0 })) }));
   const manifest = createManifest(directory, identity, records);

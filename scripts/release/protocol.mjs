@@ -29,7 +29,7 @@ export function createManifest(directory, identity, records) {
   assert.match(identity.version, /^\d+\.\d+\.\d+$/);
   assert.match(identity.agentVersion, /^\d+\.\d+\.\d+$/);
   assert.equal(identity.fxpVersion, identity.agentVersion);
-  assert.match(identity.image, /^ghcr\.io\/owo10086\/sni-panel@sha256:[0-9a-f]{64}$/);
+  assert.match(identity.image, /^ghcr\.io\/touhounetwork\/sni-panel@sha256:[0-9a-f]{64}$/);
   validateEvidence(records, identity.commit, identity.image);
   const artifacts = requiredFiles(identity.version).map(name => {
     const file = fs.readFileSync(path.join(directory, name));
@@ -42,7 +42,7 @@ export function validateManifest(manifest, directory) {
   assert.equal(manifest.schema, 1);
   assert.match(manifest.commit, /^[0-9a-f]{40}$/);
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
-  assert.match(manifest.image, /^ghcr\.io\/owo10086\/sni-panel@sha256:[0-9a-f]{64}$/);
+  assert.match(manifest.image, /^ghcr\.io\/touhounetwork\/sni-panel@sha256:[0-9a-f]{64}$/);
   assert.equal(manifest.fxpVersion, manifest.agentVersion);
   validateEvidence(manifest.checks, manifest.commit, manifest.image);
   assert.deepEqual(manifest.artifacts.map(item => item.name).sort(), requiredFiles(manifest.version).sort());

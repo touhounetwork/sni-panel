@@ -1701,7 +1701,7 @@ function DashboardLayoutContent({
             >{translateText("项目地址")}</a>
             <span className="text-muted-foreground/45">|</span>
             <a
-              href="https://owo10086.github.io/sni-panel/"
+              href="https://touhounetwork.github.io/sni-panel/"
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-foreground"

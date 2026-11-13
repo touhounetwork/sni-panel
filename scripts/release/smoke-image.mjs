@@ -4,7 +4,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { digest, transfer } from './protocol.mjs';
 const image = process.env.RELEASE_IMAGE;
-assert.match(image, /^(?:ghcr\.io\/owo10086\/sni-panel@)?sha256:[a-f0-9]{64}$/);
+assert.match(image, /^(?:ghcr\.io\/touhounetwork\/sni-panel@)?sha256:[a-f0-9]{64}$/);
 const version = JSON.parse(fs.readFileSync('package.json')).version;
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const run = args => execFileSync('docker', args, { encoding: 'utf8' }).trim();

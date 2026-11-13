@@ -26,7 +26,16 @@ type sniRoute struct {
 	MaxConnections int    `json:"maxConnections,omitempty"`
 	MaxIPs         int    `json:"maxIPs,omitempty"`
 	AccessScope    string `json:"accessScope,omitempty"`
+	// ProxyProtocolReceive is a listener-wide switch carried on every route;
+	// validation requires all routes of one table to agree.
+	ProxyProtocolReceive bool `json:"proxyProtocolReceive,omitempty"`
+	ProxyProtocolSend    bool `json:"proxyProtocolSend,omitempty"`
+	ProxyProtocolVersion int  `json:"proxyProtocolVersion,omitempty"`
 }
+
+// sniDefaultRoute is the SNI value of the route that receives connections
+// which cannot be matched: unreadable/non-TLS hello, missing SNI, or no hit.
+const sniDefaultRoute = "*"
 
 type config struct {
 	InstallationID           string `json:"installationId,omitempty"`
@@ -81,4 +90,8 @@ type config struct {
 	UDPRelayExitPort         int            `json:"udpRelayExitPort,omitempty"`
 	RelayKey                 string         `json:"relayKey,omitempty"`
 	DNSGeneration            int            `json:"dnsGeneration,omitempty"`
+
+	// ProxyProtocolUDP applies the PROXY switches to UDP as well: v2 only,
+	// one header at the start of every datagram.
+	ProxyProtocolUDP bool `json:"proxyProtocolUdp,omitempty"`
 }

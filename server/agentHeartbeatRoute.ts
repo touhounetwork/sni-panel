@@ -145,6 +145,8 @@ import { observePresenceCapableHostActivity, registerPresenceCapableHost } from 
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { normalizeSniValue } from "./repositories/repositoryUtils";
 import { getSniRuleGroupKey, isSniEntryAgentVersionSupported } from "@shared/sni";
+import { forwardXUdpProxyProtocolFields, normalizeSniPortProxyReceive, sniRouteProxyProtocolFields, sniRouteRequiresProxyProtocolAgent, type SniRouteProxyProtocolFields } from "./sniProxyProtocol";
+import { isSniProxyProtocolAgentVersionSupported } from "@shared/sni";
 import { acknowledgeSniRuntimeSession, beginSniRuntimeSession, pendingSniRuntimeSession, sniRuntimePreviouslyAppliedRuleIds, acceptSniHeartbeatProcess, isRetiredSniHeartbeatProcess, invalidateSniRuntimeConfirmation, recordSniRuntimeSnapshot, renewSniRuntimeConfirmation, sniRuntimeConfirmationBoundary, sniRouteContentMatches } from "./sniRuntimeObservability";
 import { reconcileSniChainRunningStateForHost } from "./sniRuntimeRunningState";
 import { recordForwardGroupHostRuntimeInterruption } from "./forwardGroupAdjustments";
@@ -184,7 +186,7 @@ type SniSplitterDesiredRoute = {
   maxConnections?: number;
   maxIPs?: number;
   accessScope?: string;
-};
+} & SniRouteProxyProtocolFields;
 // 孤儿端口迟滞：hostId -> (ruleId:port:protocol -> 连续判定为孤儿的心跳次数)。
 // 一个上报端口若其 ruleId 属于面板已知的本机启用规则，则该端口极可能只是运行态推导
 // 的瞬时缺口（如隧道出口端口某轮未算出），必须连续多轮都判孤儿才真正下发拆除，
@@ -472,6 +474,9 @@ type AgentLocalRuntimeRuleState = {
   maxConnections?: number;
   maxIPs?: number;
   accessScope?: string;
+  proxyProtocolReceive?: boolean;
+  proxyProtocolSend?: boolean;
+  proxyProtocolVersion?: number;
   protocol?: string;
   transportVersion?: ForwardXRuntimeTransportVersion;
   sniRouteVersion?: number;
@@ -704,6 +709,9 @@ function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeState | n
         maxConnections: Number(item?.maxConnections || 0) || undefined,
         maxIPs: Number(item?.maxIPs || 0) || undefined,
         accessScope: String(item?.accessScope || "").trim() || undefined,
+        proxyProtocolReceive: item?.proxyProtocolReceive === true || undefined,
+        proxyProtocolSend: item?.proxyProtocolSend === true || undefined,
+        proxyProtocolVersion: Number(item?.proxyProtocolVersion || 0) || undefined,
         protocol: String(item?.protocol || "").trim() || undefined,
         transportVersion: normalizeForwardXRuntimeTransportVersion(item?.transportVersion),
         sniRouteVersion: Number(item?.sniRouteVersion || 0) > 0
@@ -2172,7 +2180,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       `ExecStart=${RUNTIME_BIN} -C ${RUNTIME_CONFIG_PATH}`,
       "Restart=always",
       "RestartSec=5",
-      "LimitNOFILE=65535",
+      "LimitNOFILE=infinity",
       "",
       "[Install]",
       "WantedBy=multi-user.target",
@@ -4450,7 +4458,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           `ExecStart=${RUNTIME_BIN} -C ${TUNNEL_RUNTIME_CONFIG_PATH}`,
           "Restart=always",
           "RestartSec=5",
-          "LimitNOFILE=65535",
+          "LimitNOFILE=infinity",
           "",
           "[Install]",
           "WantedBy=multi-user.target",
@@ -4773,7 +4781,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             `ExecReload=${NGINX_BIN} -p ${NGINX_CONFIG_DIR} -c ${NGINX_CONFIG_PATH} -s reload`,
             "Restart=always",
             "RestartSec=5",
-            "LimitNOFILE=65535",
+            "LimitNOFILE=infinity",
             "",
             "[Install]",
             "WantedBy=multi-user.target",
@@ -5488,7 +5496,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             `ExecStart=/usr/local/bin/realm -c ${realmConfigPath}${ifaceFlag}`,
             "Restart=always",
             "RestartSec=5",
-            "LimitNOFILE=65535",
+            "LimitNOFILE=infinity",
             "",
             "[Install]",
             "WantedBy=multi-user.target",
@@ -5519,7 +5527,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             `ExecStart=/usr/bin/socat TCP6-LISTEN:${runtimeRule.sourcePort},fork,reuseaddr,ipv6only=0 ${socatDialEndpoint("TCP", processTarget(runtimeRule), runtimeRule.targetPort)}`,
             "Restart=always",
             "RestartSec=5",
-            "LimitNOFILE=65535",
+            "LimitNOFILE=infinity",
             "",
             "[Install]",
             "WantedBy=multi-user.target",
@@ -5793,6 +5801,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           rule.isRunning = false;
           return;
         }
+        // Older splitters ignore these fields and reject "*"; never send them.
+        const sniProxyProtocol = sniRouteProxyProtocolFields(rule, sniRuntime.resource);
+        if (sniRouteRequiresProxyProtocolAgent({ sni: sniRuntime.sni, ...sniProxyProtocol }) && !isSniProxyProtocolAgentVersionSupported(effectiveAgentVersion)) {
+          await db.markForwardRulesNotRunning([Number(rule.id)]);
+          rule.isRunning = false;
+          return;
+        }
         expectedRulePorts.add(runtimePortProtocolKey(sniRuntime.splitterPort, "tcp"));
         expectedRuleIdentityKeys.add(ruleRuntimeIdentityKey(rule.id, sniRuntime.splitterPort, "tcp"));
         expectedRulePortIdentityKeys.add(ruleRuntimePortIdentityKey(rule.id, sniRuntime.splitterPort));
@@ -5814,6 +5829,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           maxConnections: accessLimits.maxConnections,
           maxIPs: accessLimits.maxIPs,
           accessScope: accessScopeForRule(rule),
+          ...sniProxyProtocol,
         };
         const group = sniExitGroups.get(sniRuntime.splitterPort) || {
           splitterPort: sniRuntime.splitterPort,
@@ -5858,6 +5874,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       // a legacy direct resource can still use it. The final table revokes it.
       sniEntrySplitterGroups.delete(port);
     }
+    for (const group of sniExitGroups.values()) group.routes = normalizeSniPortProxyReceive(group.routes);
     for (const group of Array.from(sniEntrySplitterGroups.values()).sort((a, b) => a.sourcePort - b.sourcePort)) {
       const rulesInGroup = group.rules.slice().sort((a, b) => Number(a.id) - Number(b.id));
       const representative = rulesInGroup[0];
@@ -6299,7 +6316,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               `ExecStart=${realmCmd}`,
               "Restart=always",
               "RestartSec=5",
-              "LimitNOFILE=65535",
+              "LimitNOFILE=infinity",
               "",
               "[Install]",
               "WantedBy=multi-user.target",
@@ -6334,7 +6351,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 `ExecStart=/usr/bin/socat TCP4-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialEndpoint("TCP", processTarget(rule), rule.targetPort)}`,
                 "Restart=always",
                 "RestartSec=5",
-                "LimitNOFILE=65535",
+                "LimitNOFILE=infinity",
                 "",
                 "[Install]",
                 "WantedBy=multi-user.target",
@@ -6350,7 +6367,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 `ExecStart=/usr/bin/socat UDP4-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialEndpoint("UDP", processTarget(rule), rule.targetPort)}`,
                 "Restart=always",
                 "RestartSec=5",
-                "LimitNOFILE=65535",
+                "LimitNOFILE=infinity",
                 "",
                 "[Install]",
                 "WantedBy=multi-user.target",
@@ -6375,7 +6392,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 `ExecStart=/usr/bin/socat ${listenProto}-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialEndpoint(protoUpper, processTarget(rule), rule.targetPort)}`,
                 "Restart=always",
                 "RestartSec=5",
-                "LimitNOFILE=65535",
+                "LimitNOFILE=infinity",
                 "",
                 "[Install]",
                 "WantedBy=multi-user.target",
@@ -6475,7 +6492,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             `ExecStart=${realmCmd}`,
             "Restart=always",
             "RestartSec=5",
-            "LimitNOFILE=65535",
+            "LimitNOFILE=infinity",
             "",
             "[Install]",
             "WantedBy=multi-user.target",
@@ -6533,7 +6550,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               `ExecStart=/usr/bin/socat TCP6-LISTEN:${rule.sourcePort},fork,reuseaddr,ipv6only=0 ${socatDialEndpoint("TCP", processTarget(rule), rule.targetPort)}`,
               "Restart=always",
               "RestartSec=5",
-              "LimitNOFILE=65535",
+              "LimitNOFILE=infinity",
               "",
               "[Install]",
               "WantedBy=multi-user.target",
@@ -6549,7 +6566,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               `ExecStart=/usr/bin/socat UDP6-LISTEN:${rule.sourcePort},fork,reuseaddr,ipv6only=0 ${socatDialEndpoint("UDP", processTarget(rule), rule.targetPort)}`,
               "Restart=always",
               "RestartSec=5",
-              "LimitNOFILE=65535",
+              "LimitNOFILE=infinity",
               "",
               "[Install]",
               "WantedBy=multi-user.target",
@@ -6590,7 +6607,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               `ExecStart=${socatCmd}`,
               "Restart=always",
               "RestartSec=5",
-              "LimitNOFILE=65535",
+              "LimitNOFILE=infinity",
               "",
               "[Install]",
               "WantedBy=multi-user.target",
@@ -6722,6 +6739,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               proxyProtocolExitReceive: effectiveProxyProtocol.exitReceive,
               proxyProtocolExitSend: effectiveProxyProtocol.exitSend,
               proxyProtocolVersion: effectiveProxyProtocol.version,
+              ...forwardXUdpProxyProtocolFields(rule, tunnel, effectiveAgentVersion),
               tcpFastOpen: runtimeBool((rule as any).tcpFastOpen),
               dnsGeneration: tunnelDnsGeneration(tunnel),
             }, tunnel);

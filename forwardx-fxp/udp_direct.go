@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -285,8 +286,13 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 	})
 	defer stopSweeper()
 	buf := make([]byte, 65535)
+	sendsHeaders := udpProxyProtocolSends(cfg)
+	var oob []byte
+	if sendsHeaders && udpPacketInfoOOBSize > 0 {
+		oob = make([]byte, udpPacketInfoOOBSize)
+	}
 	for {
-		n, addr, err := conn.ReadFromUDP(buf)
+		n, addr, localIP, err := readEntryUDP(conn, buf, oob)
 		if err != nil {
 			var closing []*udpDirectEntrySession
 			sessionsMu.Lock()
@@ -328,6 +334,18 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 					continue
 				}
 			}
+		}
+		datagram := buf[:n]
+		var source, dest *net.UDPAddr
+		if cfg.ProxyProtocolUDP && cfg.ProxyProtocolReceive {
+			info, rest, ok, err := consumeProxyProtocolV2Datagram(datagram)
+			if err != nil || !ok {
+				fxpUDPDropLog.Printf("entry udp direct dropped datagram without a valid proxy protocol v2 header tunnel=%d rule=%d client=%s err=%v", cfg.TunnelID, cfg.RuleID, addr, err)
+				continue
+			}
+			datagram = rest
+			source = proxyProtocolUDPAddr(info.SourceIP, info.SourcePort)
+			dest = proxyProtocolUDPAddr(info.DestIP, info.DestPort)
 		}
 		key := addr.String()
 		sourceIP := addr.IP.String()
@@ -403,8 +421,52 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 			session.counter.connections.Add(1)
 			session.start(&workerWG)
 		}
-		session.enqueue(append([]byte(nil), buf[:n]...))
+		if sendsHeaders {
+			if source == nil {
+				source = addr
+			}
+			if dest == nil {
+				dest = udpEntryDestination(conn, localIP)
+			}
+			// Every datagram carries its own header; UDP has no stream start.
+			header := formatProxyProtocolV2UDP(source, dest)
+			session.enqueue(append(header, datagram...))
+		} else {
+			session.enqueue(append([]byte(nil), datagram...))
+		}
 	}
+}
+
+func udpProxyProtocolSends(cfg config) bool {
+	return cfg.ProxyProtocolUDP && cfg.ProxyProtocolSend && cfg.ProxyProtocolExitSend
+}
+
+// udpEntryDestination is the address the client sent to: the datagram's
+// destination IP when the kernel reported it, otherwise the listener address
+// (unspecified for a wildcard bind).
+func udpEntryDestination(conn *net.UDPConn, localIP net.IP) *net.UDPAddr {
+	listener, _ := conn.LocalAddr().(*net.UDPAddr)
+	if localIP == nil || listener == nil {
+		return listener
+	}
+	return &net.UDPAddr{IP: localIP, Port: listener.Port}
+}
+
+func proxyProtocolUDPAddr(ip string, port int) *net.UDPAddr {
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return nil
+	}
+	return &net.UDPAddr{IP: parsed, Port: port}
+}
+
+// proxyHeaderLen is the PROXY header this entry prepended to payload. It is
+// transport metadata and excluded from rate limits and traffic accounting.
+func (s *udpDirectEntrySession) proxyHeaderLen(payload []byte) int {
+	if !udpProxyProtocolSends(s.cfg) {
+		return 0
+	}
+	return proxyProtocolV2HeaderLen(payload)
 }
 
 func newUDPDirectEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter, counter *trafficCounter, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpDirectEntrySession)) (*udpDirectEntrySession, error) {
@@ -502,8 +564,9 @@ func (s *udpDirectEntrySession) writeLoop() {
 			continue
 		}
 		payload := queued.payload
+		billed := len(payload) - s.proxyHeaderLen(payload)
 		s.touch()
-		if !s.inLimiter.waitDone(s.done, len(payload)) {
+		if !s.inLimiter.waitDone(s.done, billed) {
 			queued.done()
 			return
 		}
@@ -533,7 +596,7 @@ func (s *udpDirectEntrySession) writeLoop() {
 				return
 			}
 		}
-		s.counter.in.Add(uint64(len(payload)))
+		s.counter.in.Add(uint64(billed))
 		queued.done()
 	}
 }

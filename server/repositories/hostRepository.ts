@@ -718,6 +718,7 @@ async function deleteHostRowsUnlocked(id: number): Promise<void> {
   await executeRaw(`DELETE FROM ${quoteIdentifier("agent_installations")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]);
   await db.delete(hostProbeServiceStats).where(eq(hostProbeServiceStats.hostId, id));
   await executeRaw(`DELETE FROM ${quoteIdentifier("host_probe_health")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]);
+  await executeRaw(`DELETE FROM ${quoteIdentifier("host_install_hooks")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]);
   await executeRaw(`DELETE FROM ${quoteIdentifier("resource_alert_service_state")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]);
   await executeRaw(`DELETE FROM ${quoteIdentifier("operations_alert_state")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]);
   await executeRaw(`DELETE FROM ${quoteIdentifier("host_availability_intervals")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]);

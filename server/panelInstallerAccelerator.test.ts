@@ -278,8 +278,8 @@ latest_release_version
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), "9.8.7");
     assert.deepEqual(result.calls, [
-      "https://mirror.example.com/https://api.github.com/repos/owo10086/sni-panel/releases/latest",
-      "https://api.github.com/repos/owo10086/sni-panel/releases/latest",
+      "https://mirror.example.com/https://api.github.com/repos/touhounetwork/sni-panel/releases/latest",
+      "https://api.github.com/repos/touhounetwork/sni-panel/releases/latest",
     ]);
     assert.match(result.stderr, /falling back to GitHub/);
   }
@@ -315,7 +315,7 @@ curl() {
     *) printf '000'; return 22 ;;
   esac
 }
-code="$(download_github_archive 'https://github.com/owo10086/sni-panel/releases/download/v9.8.7/forwardx-panel-v9.8.7.tar.gz' "$OUTPUT_FILE")"
+code="$(download_github_archive 'https://github.com/touhounetwork/sni-panel/releases/download/v9.8.7/forwardx-panel-v9.8.7.tar.gz' "$OUTPUT_FILE")"
 printf 'CODE=%s\\n' "$code"
 `,
   });
@@ -323,8 +323,8 @@ printf 'CODE=%s\\n' "$code"
   assert.equal(result.stdout.trim(), "CODE=200");
   assert.notEqual(result.output, "<html>mirror error</html>");
   assert.deepEqual(result.calls, [
-    "https://mirror.example.com/https://github.com/owo10086/sni-panel/releases/download/v9.8.7/forwardx-panel-v9.8.7.tar.gz",
-    "https://github.com/owo10086/sni-panel/releases/download/v9.8.7/forwardx-panel-v9.8.7.tar.gz",
+    "https://mirror.example.com/https://github.com/touhounetwork/sni-panel/releases/download/v9.8.7/forwardx-panel-v9.8.7.tar.gz",
+    "https://github.com/touhounetwork/sni-panel/releases/download/v9.8.7/forwardx-panel-v9.8.7.tar.gz",
   ]);
   assert.match(result.stderr, /invalid-archive/);
 });

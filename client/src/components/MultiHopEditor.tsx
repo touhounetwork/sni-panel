@@ -47,7 +47,6 @@ interface MultiHopEditorProps {
   headerLabel?: string;
   initialHopIds?: number[];
   initialHopConnectHosts?: Array<string | null>;
-  maxHops?: number;
   onChange?: (hopHostIds: number[]) => void;
   onConnectHostsChange?: (hopConnectHosts: Array<string | null>) => void;
   fixedExitHostIds?: number[];
@@ -88,7 +87,6 @@ export default function MultiHopEditor({
   headerLabel,
   initialHopIds,
   initialHopConnectHosts,
-  maxHops = 5,
   onChange,
   onConnectHostsChange,
   fixedExitHostIds = [],
@@ -212,8 +210,7 @@ export default function MultiHopEditor({
       if (!fixedPositionsChanged) setHops(nextHops);
     },
   });
-  const reachedMaxHops = hops.length >= maxHops;
-  const availableHosts = reachedMaxHops ? [] : hosts.filter((host) => !selectedIds.has(host.id) && !excludedIds.has(host.id));
+  const availableHosts = hosts.filter((host) => !selectedIds.has(host.id) && !excludedIds.has(host.id));
   const relayCount = Math.max(0, hops.length - (externalEntry ? 0 : 1) - (externalExit ? 0 : 1));
   const showRelayMode = relayModeSupported && relayCount >= 2;
 
@@ -230,7 +227,6 @@ export default function MultiHopEditor({
   }, [excludedIds]);
 
   const addHop = (hostId: string) => {
-    if (reachedMaxHops) return;
     const id = Number(hostId);
     if (!id || selectedIds.has(id)) return;
     const host = hostById.get(id);
@@ -275,19 +271,17 @@ export default function MultiHopEditor({
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-sm font-medium">{headerLabel}</span>
           {hops.length > 0 && (
-            <span className="text-xs text-muted-foreground">{hops.length} / {maxHops}{translateText(" 台主机")}</span>
+            <span className="text-xs text-muted-foreground">{translateText("{0} 台主机", [hops.length])}</span>
           )}
         </div>
       )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <Select value="" onValueChange={addHop} disabled={reachedMaxHops}>
+        <Select value="" onValueChange={addHop}>
           <SelectTrigger className="h-8 min-w-0 flex-1 text-sm sm:max-w-sm">
-            <SelectValue placeholder={reachedMaxHops ? translateText("最多 {0} 级", [maxHops]) : translateText("添加主机到链路...")} />
+            <SelectValue placeholder={translateText("添加主机到链路...")} />
           </SelectTrigger>
           <SelectContent>
-            {reachedMaxHops ? (
-              <div className="px-2 py-4 text-center text-xs text-muted-foreground">{translateText("最多支持 ")}{maxHops}{translateText(" 级隧道")}</div>
-            ) : availableHosts.length === 0 && (
+            {availableHosts.length === 0 && (
               <div className="px-2 py-4 text-center text-xs text-muted-foreground">{translateText("已全部添加")}</div>
             )}
             {availableHosts.map((host) => (
@@ -298,7 +292,7 @@ export default function MultiHopEditor({
           </SelectContent>
         </Select>
         {!headerLabel && hops.length > 0 && (
-          <span className="text-xs text-muted-foreground sm:whitespace-nowrap">{hops.length} / {maxHops}{translateText(" 台主机")}</span>
+          <span className="text-xs text-muted-foreground sm:whitespace-nowrap">{translateText("{0} 台主机", [hops.length])}</span>
         )}
         {showRelayMode && (
           <div className="flex min-w-0 items-center gap-2 sm:ml-auto">

@@ -44,6 +44,7 @@ export const MIGRATION_TABLES = [
   "forward_group_events",
   "host_metrics",
   "host_availability_intervals",
+  "host_install_hooks",
   "host_traffic_counters",
   "user_traffic_counters",
   "forward_rule_traffic_counters",
@@ -107,6 +108,45 @@ export const MIGRATION_TABLES = [
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
+
+// Before 3.10 the splitter ignored the PROXY columns of SNI rules, so stale
+// values copied in from other rules were harmless. They take effect now;
+// clear them once so upgrading never starts sending or expecting headers.
+const SNI_PROXY_PROTOCOL_RESET_MARKER = "sni-proxy-protocol-reset-v1";
+const sniProxyProtocolResetSql = (q: (id: string) => string, falseValue: string) => `UPDATE ${q("forward_rules")} SET ${[
+  "proxyProtocolReceive", "proxyProtocolSend", "proxyProtocolExitReceive", "proxyProtocolExitSend",
+].map((column) => `${q(column)} = ${falseValue}`).join(", ")}, ${q("proxyProtocolVersion")} = 1 WHERE ${q("sni")} IS NOT NULL AND ${q("sni")} <> ''`;
+
+function resetSqliteSniProxyProtocol(sqlite: Database.Database) {
+  sqlite.transaction(() => {
+    const claimed = sqlite.prepare(
+      "INSERT OR IGNORE INTO system_settings (key, value, updatedAt) VALUES (?, '1', unixepoch())",
+    ).run(SNI_PROXY_PROTOCOL_RESET_MARKER);
+    if (claimed.changes === 0) return;
+    sqlite.exec(sniProxyProtocolResetSql((id) => quote("sqlite", id), "0"));
+  })();
+}
+
+async function resetMysqlSniProxyProtocol(pool: Pool) {
+  const [rows] = await pool.query<any[]>("SELECT `key` FROM `system_settings` WHERE `key` = ? LIMIT 1", [SNI_PROXY_PROTOCOL_RESET_MARKER]);
+  if (rows.length > 0) return;
+  await pool.query(sniProxyProtocolResetSql((id) => quote("mysql", id), "0"));
+  await pool.execute(
+    "INSERT INTO system_settings (`key`, value, updatedAt) VALUES (?, '1', UNIX_TIMESTAMP()) ON DUPLICATE KEY UPDATE `key` = `key`",
+    [SNI_PROXY_PROTOCOL_RESET_MARKER],
+  );
+}
+
+async function resetPostgresqlSniProxyProtocol(pool: pg.Pool) {
+  const existing = await pool.query(`SELECT "key" FROM "system_settings" WHERE "key" = $1 LIMIT 1`, [SNI_PROXY_PROTOCOL_RESET_MARKER]);
+  if (existing.rowCount) return;
+  // Mark only after the reset so a failed attempt is retried next startup.
+  await pool.query(sniProxyProtocolResetSql((id) => quote("postgresql", id), "FALSE"));
+  await pool.query(
+    `INSERT INTO "system_settings" ("key", value, "updatedAt") VALUES ($1, '1', EXTRACT(EPOCH FROM NOW())::INT) ON CONFLICT ("key") DO NOTHING`,
+    [SNI_PROXY_PROTOCOL_RESET_MARKER],
+  );
+}
 
 function backfillSqliteLastAutoTrafficReset(sqlite: Database.Database) {
   const migrate = sqlite.transaction(() => {
@@ -172,6 +212,23 @@ const tables: TableDef[] = [
   { name: "operations_source_daily", columns: [c("id", "id"), c("dayStart", "epoch", { notNull: true }), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("ip", "varchar", { length: 64, notNull: true }), c("userId", "int", { notNull: true }), c("logicalRuleId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("unknownSamples", "bigint", { notNull: true, default: 0 }), c("knownSamples", "bigint", { notNull: true, default: 0 }), c("lastSeen", "epoch", { notNull: true })], unique: [["dayStart", "ruleId", "hostId", "ip"]], indexes: [["dayStart", "ip"], ["userId", "dayStart"], ["hostId", "dayStart"]] },
   { name: "operations_source_status", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true }), c("lastSeen", "epoch", { notNull: true })], unique: [["hostId"]], indexes: [["lastSeen"]] },
   { name: "operations_ip_geo", columns: [c("id", "id"), c("address", "varchar", { length: 64, notNull: true }), c("countryCode", "varchar", { length: 8, notNull: true }), c("countryName", "varchar", { length: 128 }), c("region", "varchar", { length: 128 }), c("city", "varchar", { length: 128 }), c("isp", "varchar", { length: 128 }), c("datasetVersion", "varchar", { length: 64, notNull: true }), c("expiresAt", "epoch", { notNull: true })], unique: [["address"]], indexes: [["expiresAt"]] },
+  // Admin batch commands. Operational history kept 30 days; not migrated.
+  { name: "command_batches", columns: [c("id", "id"), c("command", "longtext", { notNull: true }), c("timeoutSeconds", "int", { notNull: true }),
+    c("createdBy", "int"), c("createdByName", "varchar", { length: 255 }), c("hostCount", "int", { notNull: true }),
+    c("createdAt", "epoch", { notNull: true }), c("cancelledAt", "epoch")], indexes: [["createdAt"]] },
+  { name: "command_batch_results", columns: [c("id", "id"), c("batchId", "int", { notNull: true }), c("hostId", "int", { notNull: true }),
+    c("hostName", "varchar", { length: 255, notNull: true }), c("taskId", "varchar", { length: 64, notNull: true }),
+    c("status", "varchar", { length: 16, notNull: true }), c("exitCode", "int"), c("durationMs", "int"), c("output", "longtext"),
+    c("outputTruncated", "bool", { notNull: true, default: false }), c("startedAt", "epoch"), c("finishedAt", "epoch"),
+    c("deadlineAt", "epoch", { notNull: true }), c("updatedAt", "epoch", { notNull: true })],
+    unique: [["taskId"]], indexes: [["batchId"], ["hostId", "status"], ["status", "deadlineAt"]] },
+  // Per-host command run after an Agent install/upgrade, and its last result.
+  { name: "host_install_hooks", columns: [c("id", "id"), c("hostId", "int", { notNull: true }),
+    c("mode", "varchar", { length: 16, notNull: true, default: "inherit" }), c("command", "longtext"),
+    c("lastRunAt", "epoch"), c("lastRunMode", "varchar", { length: 16 }), c("lastAgentVersion", "varchar", { length: 32 }),
+    c("lastSource", "varchar", { length: 16 }), c("lastExitCode", "int"), c("lastTimedOut", "bool", { notNull: true, default: false }),
+    c("lastDurationMs", "int"), c("lastOutput", "longtext"), c("lastOutputTruncated", "bool", { notNull: true, default: false }),
+    c("updatedAt", "epoch", { notNull: true })], unique: [["hostId"]] },
   { name: "host_availability_intervals", columns: [c("id", "id"), c("observationKey", "varchar", { length: 36, notNull: true }), c("hostId", "int", { notNull: true }), c("online", "int", { notNull: true }), c("offlineIncident", "int", { notNull: true, default: 0 }), c("startAt", "epoch", { notNull: true }), c("endAt", "epoch", { notNull: true })], unique: [["observationKey"]], indexes: [["hostId", "startAt", "id"], ["endAt", "id"]] },
   { name: "affiliate_accounts", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("availableCents", "bigint", { notNull: true, default: 0 }), c("blocked", "bool", { notNull: true, default: false }), c("rateBps", "int"), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId"]] },
   { name: "affiliate_codes", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("code", "varchar", { length: 32, notNull: true }), c("active", "bool", { notNull: true, default: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["code"]], indexes: [["userId"]] },
@@ -511,6 +568,7 @@ const tables: TableDef[] = [
       c("proxyProtocolReceive", "bool", { notNull: true, default: false }), c("proxyProtocolSend", "bool", { notNull: true, default: false }),
       c("proxyProtocolExitReceive", "bool", { notNull: true, default: false }), c("proxyProtocolExitSend", "bool", { notNull: true, default: false }),
       c("proxyProtocolVersion", "int", { notNull: true, default: 1 }),
+      c("proxyProtocolUdp", "bool", { notNull: true, default: false }),
       c("tcpFastOpen", "bool", { notNull: true, default: false }), c("udpOverTcp", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
@@ -765,6 +823,7 @@ async function ensureMysqlSchema(pool: Pool) {
     [key, value],
   );
   await backfillMysqlLastAutoTrafficReset(pool);
+  await resetMysqlSniProxyProtocol(pool);
 }
 
 function indexName(prefix: string, table: string, cols: string[]) {
@@ -806,6 +865,7 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
     [key, value],
   );
   await backfillPostgresqlLastAutoTrafficReset(pool);
+  await resetPostgresqlSniProxyProtocol(pool);
 }
 
 function ensureSqliteSchema(sqlite: Database.Database) {
@@ -839,6 +899,7 @@ function ensureSqliteSchema(sqlite: Database.Database) {
   insertFeatureSetting.run("affiliateEnabled", affiliateEnabledFromLegacySidebar(sidebarRow?.value));
   insertFeatureSetting.run("supportTicketsEnabled", supportTicketsEnabledFromLegacySidebar(sidebarRow?.value));
   backfillSqliteLastAutoTrafficReset(sqlite);
+  resetSqliteSniProxyProtocol(sqlite);
 }
 
 export async function ensureDatabaseSchema(target?: Pool | pg.Pool | Database.Database) {

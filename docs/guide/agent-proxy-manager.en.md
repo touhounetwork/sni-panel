@@ -10,7 +10,7 @@ Run as root on the managed host, replacing the proxy, panel URL and Token:
 
 ```bash
 curl --proxy 'socks5h://127.0.0.1:1080' -fsSL \
-  https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh \
+  https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh \
   -o /tmp/forwardx-install-agent.sh
 
 PANEL_URL='https://panel.example.com' bash /tmp/forwardx-install-agent.sh \

@@ -38,7 +38,28 @@ When the running table is already safe but deleting the first rule leaves an old
 
 Changing a destination address or port preserves historical measurements and requires confirmation of the new splitter contents; entrance eligibility does not wait for a new destination probe. The selected entrance, its current configuration and the group domain are rechecked after the DDNS provider responds, so an intervening save cannot commit success using superseded settings. A rejected selection also triggers reconciliation of the provider record.
 
-A hostname is unique across ports and resources on each entrance. Managed copies of the same root are legal. Ordinary forwarding and SNI cannot occupy the same business port. Unknown names, missing SNI, non-TLS traffic and incomplete handshakes are rejected. Matched TLS handshakes are forwarded unchanged.
+A hostname is unique per entrance and entry port, across resources. Each entry port has its own splitter table, so different ports may use the same hostname with different destinations. Managed copies of the same root are legal. Ordinary forwarding and SNI cannot occupy the same business port. Without a default destination, unknown names, missing SNI, non-TLS traffic and incomplete handshakes are rejected. Matched TLS handshakes are forwarded unchanged.
+
+## Default destination
+
+A rule whose SNI is `*` is the entry port's default destination. All three kinds of unrecognised connection go to it, with the bytes the splitter has already read replayed unchanged:
+
+| Case | Replayed |
+| --- | --- |
+| Read failure: non-TLS, or the handshake did not arrive within 2 seconds | Every byte read so far (possibly a few bytes or none) |
+| ClientHello without SNI | The full ClientHello |
+| Hostname not in the table | The full ClientHello |
+
+- At most one `*` rule per entry port (checked with the same scope as hostname uniqueness). It has its own destination, limits and traffic, and can send a PROXY header.
+- These connections still count as unmatched.
+- Only the bare `*` is accepted; wildcards such as `*.example.com` are not.
+- Requires entry Agent `3.10.0` or later; older splitters reject the whole table.
+
+Use it to hand probes to a real site instead of closing them immediately, which active probing can detect.
+
+## PROXY Protocol
+
+SNI rules on port forwarding resources and host failover groups can send a PROXY v1 or v2 header per rule (header first, then the replayed ClientHello) and receive upstream v1/v2 headers per entry port. Receiving belongs to the entry port: saving one rule applies it to every SNI rule on that port, and new rules on the port inherit it. With receiving on, connections without a valid header are closed, and the parsed client address drives connection limits and the forwarded header. Headers are not rate limited or counted as traffic. Chains and tunnels cannot enable it because their splitters never see the client address. Requires entry Agent `3.10.0` or later. See [PROXY Protocol](./proxy-protocol.en.md).
 
 ## Copy, import and export
 
@@ -49,7 +70,7 @@ API#api.example.com#203.0.113.10#443
 Files#files.example.com#203.0.113.20#8443
 ```
 
-Choose the common entrance port. Each item saves independently: failed items show their reasons and remain for retry, while successful items stay saved. JSON exports retain resource context, SNI hostname, entrance port, destination, rate, connection limit, quota and expiry. Confirm the destination resource when importing. Duplicate names on an entrance are rejected; they never silently become ordinary rules. Text imports contain only the four shown fields; set additional limits in the editor or JSON. Copies and newly imported rules start their own usage counters.
+Choose the common entrance port. Each item saves independently: failed items show their reasons and remain for retry, while successful items stay saved. JSON exports retain resource context, SNI hostname, entrance port, destination, rate, connection limit, quota and expiry. Confirm the destination resource when importing. Duplicate names on the same entrance port are rejected; they never silently become ordinary rules. Text imports contain only the four shown fields; set additional limits in the editor or JSON. Copies and newly imported rules start their own usage counters.
 
 SNI management requires administrator access. Administrators acting for a user still obey that user's resource access, allowed port range and quota. Administrator-managed rules remain read-only for ordinary owners, and member copies are controlled through the root rule.
 
@@ -65,6 +86,6 @@ This is simultaneous service, separate from the host failover group's current-me
 
 DNS qualification also requires online state, fresh full confirmation, enabled China checks and the required recovery window. Missing or failed SNI destination probes do not independently block it. A/AAAA records include all eligible entries; CNAME keeps a single target. Disabled automatic DNS leaves record management to the administrator. A never-confirmed entry cannot be published as a first-use fallback. An ordinary all-unhealthy fallback can retain only a previously used member that is still enabled, not removed and not traffic-excluded; retained records are still shown as unhealthy, not ready.
 
-Limits apply separately on each entry. A 10 Mbps rule allows 10 Mbps on A and 10 Mbps on B, not a shared aggregate cap. Actual usage of 30 GB on A and 20 GB on B becomes 50 GB on the logical rule and its owner; replayed reports must not charge twice. Member removal keeps pending stop confirmation and settlement records until safely completed. Existing per-host hostname uniqueness, port sharing boundaries, atomic saves and failed-revocation protection continue to apply. Live host port occupancy is not reintroduced as a pre-save requirement; a host execution failure is shown for that entry while healthy entries keep serving.
+Limits apply separately on each entry. A 10 Mbps rule allows 10 Mbps on A and 10 Mbps on B, not a shared aggregate cap. Actual usage of 30 GB on A and 20 GB on B becomes 50 GB on the logical rule and its owner; replayed reports must not charge twice. Member removal keeps pending stop confirmation and settlement records until safely completed. Existing per-entry-port hostname uniqueness, port sharing boundaries, atomic saves and failed-revocation protection continue to apply. Live host port occupancy is not reintroduced as a pre-save requirement; a host execution failure is shown for that entry while healthy entries keep serving.
 
 SNI and its member copies remain outside ordinary source-IP analytics; a shared port is not evidence of hostname attribution. This integration does not open multi-exit direct SNI tunnels. [中文配置步骤](./sni-routing.md#端口资源通过入口组直接分流).

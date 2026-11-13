@@ -7,7 +7,7 @@
 使用 root 执行 Docker 一键安装；非 root 将管道后的 bash 替换为 sudo bash：
 
 ~~~bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language zh-CN
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language zh-CN
 ~~~
 
 安装时按提示选择端口和数据库。默认访问 http://服务器IP:9810；不使用 Docker 时参考 [本地部署](./deploy-local.md)。

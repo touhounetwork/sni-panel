@@ -15,7 +15,7 @@ function setup(t) {
   git(['init']); git(['config', 'user.email', 'fixture@example.test']); git(['config', 'user.name', '发布测试']);
   fs.writeFileSync(`${root}/source`, 'immutable'); git(['add', 'source']); git(['commit', '-m', '准备发布测试']);
   const commit = git(['rev-parse', 'HEAD']);
-  const identity = { commit, version: '3.5.2', agentVersion: '3.5.0', fxpVersion: '3.5.0', image: `ghcr.io/owo10086/sni-panel@sha256:${'b'.repeat(64)}` };
+  const identity = { commit, version: '3.5.2', agentVersion: '3.5.0', fxpVersion: '3.5.0', image: `ghcr.io/touhounetwork/sni-panel@sha256:${'b'.repeat(64)}` };
   const dir = `${root}/.release/candidate`; fs.mkdirSync(dir, { recursive: true });
   for (const name of requiredFiles(identity.version)) fs.writeFileSync(`${dir}/${name}`, name);
   const records = [...Object.keys(groups), 'bundle', 'image'].map(group => ({ group, commit, status: 'passed', sourceClean: true, image: identity.image,
@@ -64,7 +64,7 @@ if (program === 'gh') {
 `;
   for (const program of ['gh', 'docker']) { fs.writeFileSync(`${root}/bin/${program}`, fake); fs.chmodSync(`${root}/bin/${program}`, 0o755); }
   const run = fault => spawnSync(process.execPath, [cli], { cwd: root, encoding: 'utf8', env: { ...process.env,
-    PATH: `${root}/bin:${process.env.PATH}`, GITHUB_REPOSITORY: 'owo10086/sni-panel', GITHUB_REF_NAME: 'v3.5.2',
+    PATH: `${root}/bin:${process.env.PATH}`, GITHUB_REPOSITORY: 'touhounetwork/sni-panel', GITHUB_REF_NAME: 'v3.5.2',
     FAKE_REMOTE: `${root}/remote`, FAKE_COMMIT: commit, FAKE_FAULT: fault || '' } });
   return { root, dir, run };
 }

@@ -43,6 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { HintSwitch } from "@/components/ui/hint-switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LinkSectionTabs, LINK_SECTIONS as TUNNEL_SECTIONS, type LinkSection as TunnelSection } from "@/components/LinkSectionTabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -68,7 +69,6 @@ import { adaptivePollingInterval } from "@/lib/queryPolicy";
 import { hasQuerySnapshotAfter } from "@/lib/manualTestCache";
 import { getTunnelCardRouteSummary, getTunnelExitNames, getTunnelHopIds, getTunnelRouteText, tunnelHopHostName, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
-import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { cn } from "@/lib/utils";
 import {
   Activity,
@@ -174,6 +174,7 @@ type TunnelForm = {
   proxyProtocolExitReceive: boolean;
   proxyProtocolExitSend: boolean;
   proxyProtocolVersion: 1 | 2;
+  proxyProtocolUdp: boolean;
   tcpFastOpen: boolean;
   udpOverTcp: boolean;
   loadBalanceEnabled: boolean;
@@ -338,6 +339,7 @@ const defaultForm: TunnelForm = {
   proxyProtocolExitReceive: false,
   proxyProtocolExitSend: false,
   proxyProtocolVersion: 1,
+  proxyProtocolUdp: false,
   tcpFastOpen: false,
   udpOverTcp: false,
   loadBalanceEnabled: false,
@@ -812,8 +814,6 @@ type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
 const CHAIN_VIEW_MODE_STORAGE_KEY = "forwardx.forwardGroups.viewMode";
-const MAX_TUNNEL_HOPS = 10;
-const MAX_EXTRA_TUNNEL_EXITS = 4;
 
 function getStoredTunnelViewMode(): TunnelViewMode {
   if (typeof window === "undefined") return "card";
@@ -2746,7 +2746,7 @@ function TunnelsContent() {
           hostId,
           connectHost: (privateAddr && sameAddress(connectHost, privateAddr)) || (ipv6Addr && sameAddress(connectHost, ipv6Addr)) ? connectHost : "",
         };
-      }).slice(0, MAX_EXTRA_TUNNEL_EXITS)
+      })
       : [];
     const entryGroupId = tunnel.entryGroupId ? Number(tunnel.entryGroupId) : null;
     // A direct exit can intentionally use the same hosts as an exit group.
@@ -2792,6 +2792,7 @@ function TunnelsContent() {
       proxyProtocolExitReceive: proxySupported && !!tunnel.proxyProtocolExitReceive,
       proxyProtocolExitSend: proxySupported && !!tunnel.proxyProtocolExitSend,
       proxyProtocolVersion: Number(tunnel.proxyProtocolVersion) === 2 ? 2 : 1,
+      proxyProtocolUdp: transportTuningSupported && !!tunnel.proxyProtocolUdp,
       tcpFastOpen: transportTuningSupported && !!tunnel.tcpFastOpen,
       udpOverTcp: transportTuningSupported && !!tunnel.udpOverTcp,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
@@ -2996,10 +2997,6 @@ function TunnelsContent() {
       toast.error(translateText("请填写隧道名称并至少选择入口主机和出口组"));
       return;
     }
-    if (actualRoute.hopHostIds.length > MAX_TUNNEL_HOPS) {
-      toast.error(translateText("多级隧道最多支持 {0} 级", [MAX_TUNNEL_HOPS]));
-      return;
-    }
     const orderedHopHostIds = [...actualRoute.hopHostIds];
     const orderedHopConnectHosts = [...actualRoute.hopConnectHosts];
     const entryHostId = orderedHopHostIds[0] || 0;
@@ -3086,10 +3083,6 @@ function TunnelsContent() {
       .filter((exit) => exit.hostId > 0 || exit.connectHost);
     const loadBalanceEnabled = !!submitForm.loadBalanceEnabled && loadBalanceExits.length > 0;
     if (loadBalanceEnabled) {
-      if (loadBalanceExits.length > MAX_EXTRA_TUNNEL_EXITS) {
-        toast.error(translateText("最多额外添加 {0} 个出口", [MAX_EXTRA_TUNNEL_EXITS]));
-        return;
-      }
       const usedExitIds = new Set<number>(orderedHopHostIds.map((id) => Number(id)).filter((id) => id > 0));
       for (const exit of loadBalanceExits) {
         if (!exit.hostId) {
@@ -3179,6 +3172,7 @@ function TunnelsContent() {
       proxyProtocolExitReceive: proxySupported && submitForm.proxyProtocolExitReceive,
       proxyProtocolExitSend: proxySupported && submitForm.proxyProtocolExitSend,
       proxyProtocolVersion: proxyAnyEnabled ? submitForm.proxyProtocolVersion : 1,
+      proxyProtocolUdp: transportTuningSupported && !!proxyAnyEnabled && submitForm.proxyProtocolUdp,
       tcpFastOpen: transportTuningSupported && submitForm.tcpFastOpen,
       udpOverTcp: transportTuningSupported && submitForm.udpOverTcp,
       entryGroupId: submitForm.entryGroupId || null,
@@ -3209,10 +3203,6 @@ function TunnelsContent() {
     const minChainHops = chainCreateForm.entryGroupId ? 1 : 2;
     if (!name || chainCreateForm.hopHostIds.length < minChainHops) {
       toast.error(chainCreateForm.entryGroupId ? translateText("请填写转发链名称并至少选择一台主机") : translateText("请填写转发链名称并至少选择两台主机"));
-      return;
-    }
-    if (chainCreateForm.hopHostIds.length > MAX_FORWARD_GROUP_MEMBERS) {
-      toast.error(translateText("转发链最多支持 {0} 台主机", [MAX_FORWARD_GROUP_MEMBERS]));
       return;
     }
     const normalizedConnectHosts = normalizeChainConnectHostsForHosts(
@@ -3292,6 +3282,7 @@ function TunnelsContent() {
       proxyProtocolExitReceive: proxySupported ? prev.proxyProtocolExitReceive : false,
       proxyProtocolExitSend: proxySupported ? prev.proxyProtocolExitSend : false,
       proxyProtocolVersion: proxySupported ? prev.proxyProtocolVersion : 1,
+      proxyProtocolUdp: transportTuningSupported ? prev.proxyProtocolUdp : false,
       tcpFastOpen: transportTuningSupported ? prev.tcpFastOpen : false,
       udpOverTcp: transportTuningSupported ? prev.udpOverTcp : false,
     }));
@@ -3593,6 +3584,7 @@ function TunnelsContent() {
                   proxyProtocolExitReceive: false,
                   proxyProtocolExitSend: false,
                   proxyProtocolVersion: 1,
+                  proxyProtocolUdp: false,
                 }));
               }
             }}
@@ -3610,7 +3602,8 @@ function TunnelsContent() {
                       type="button"
                       className={segmentedOptionClassName(form.proxyProtocolVersion === version)}
                       disabled={!proxyAnyEnabled}
-                      onClick={() => setForm((prev) => ({ ...prev, proxyProtocolVersion: version }))}
+                      // v1 has no UDP form; choosing it turns UDP off.
+                      onClick={() => setForm((prev) => ({ ...prev, proxyProtocolVersion: version, proxyProtocolUdp: version === 2 && prev.proxyProtocolUdp }))}
                       title={!proxyAnyEnabled ? translateText("开启任一 PROXY Protocol 开关后可选择版本") : undefined}
                     >
                       V{version}
@@ -3625,6 +3618,18 @@ function TunnelsContent() {
               {renderProxySwitch(translateText("出口接收入口"), "proxyProtocolExitReceive")}
               {renderProxySwitch(translateText("出口发送到目标"), "proxyProtocolExitSend")}
             </div>
+            <label className="flex min-h-10 items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-2.5 py-2">
+              <span className="min-w-0 break-words text-sm">{translateText("同时用于 UDP（仅 V2）")}</span>
+              <HintSwitch
+                aria-label={translateText("同时用于 UDP（仅 V2）")}
+                hint={transportTuningSupported
+                  ? translateText("UDP 每个数据报开头都带一个 PROXY v2 头；选择后自动切到 V2。需要入口 Agent 3.10.0 或更高版本。")
+                  : translateText("仅 ForwardX 隧道支持：GOST 隧道不能逐个数据报写入 PROXY 头。")}
+                checked={form.proxyProtocolUdp}
+                disabled={!transportTuningSupported || (!proxyAnyEnabled && !form.proxyProtocolUdp)}
+                onCheckedChange={(checked) => setForm((prev) => ({ ...prev, proxyProtocolUdp: checked, proxyProtocolVersion: checked ? 2 : prev.proxyProtocolVersion }))}
+              />
+            </label>
           </div>
         )}
       </div>
@@ -4560,7 +4565,6 @@ function TunnelsContent() {
                         headerLabel={translateText("主机链路")}
                         initialHopIds={form.hopHostIds}
                         initialHopConnectHosts={form.hopConnectHosts}
-                        maxHops={MAX_TUNNEL_HOPS}
                         externalEntry={!!form.entryGroupId}
                         externalExit={!!form.exitGroupId}
                         relayMode={form.relayMode}
@@ -4781,7 +4785,6 @@ function TunnelsContent() {
                         hosts={hosts || []}
                         initialHopIds={chainCreateForm.hopHostIds}
                         initialHopConnectHosts={chainCreateForm.hopConnectHosts}
-                        maxHops={MAX_FORWARD_GROUP_MEMBERS}
                         externalEntry={!!chainCreateForm.entryGroupId}
                         excludedHostIds={externalChainEntryHostIds(chainCreateForm.entryGroupId)}
                         onChange={(ids) => {
@@ -4867,7 +4870,6 @@ function TunnelsContent() {
                 headerLabel={translateText("主机链路")}
                 initialHopIds={form.hopHostIds}
                 initialHopConnectHosts={form.hopConnectHosts}
-                maxHops={MAX_TUNNEL_HOPS}
                 externalEntry={!!form.entryGroupId}
                 externalExit={!!form.exitGroupId}
                 relayMode={form.relayMode}

@@ -34,7 +34,8 @@ export async function getDirectSniReadyPorts(hostId: number): Promise<Set<number
     const applied = rules.every(rule => chainEntryRuleIds.has(Number(rule.id))
       ? isSniRouteApplied({ id: rule.id, hostId: rule.hostId, sourcePort: rule.sourcePort }, { sni: rule.sni, targetIp: rule.targetIp, targetPort: rule.targetPort })
       : isFailoverSniRuleApplied({ id: rule.id, hostId: rule.hostId, userId: rule.userId, sourcePort: rule.sourcePort,
-        sni: rule.sni, targetIp: rule.targetIp, targetPort: rule.targetPort, rateLimitMbps: rule.rateLimitMbps, maxConnections: rule.maxConnections }));
+        sni: rule.sni, targetIp: rule.targetIp, targetPort: rule.targetPort, rateLimitMbps: rule.rateLimitMbps, maxConnections: rule.maxConnections,
+        proxyProtocolReceive: rule.proxyProtocolReceive, proxyProtocolSend: rule.proxyProtocolSend, proxyProtocolVersion: rule.proxyProtocolVersion }));
     if (applied && report?.appliedRoutes.length === ids.size
       && report.appliedRoutes.every(route => ids.has(Number(route.ruleId)))) ready.add(port);
   }

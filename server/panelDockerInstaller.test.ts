@@ -96,7 +96,7 @@ test("Docker install and upgrade carry the resolved release version into verific
 });
 
 test("Docker install defaults to the repository-owned GHCR image", () => {
-  assert.match(script, /^IMAGE_REPO="\$\{FORWARDX_IMAGE_REPO:-ghcr\.io\/owo10086\/sni-panel\}"$/m);
+  assert.match(script, /^IMAGE_REPO="\$\{FORWARDX_IMAGE_REPO:-ghcr\.io\/touhounetwork\/sni-panel\}"$/m);
   assert.doesNotMatch(script, /ghcr\.io\/poouo\/forwardx/i);
 });
 

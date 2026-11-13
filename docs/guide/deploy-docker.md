@@ -7,14 +7,14 @@
 使用 root 执行；非 root 将管道后的 bash 替换为 sudo bash。
 
 ~~~bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language zh-CN
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language zh-CN
 ~~~
 
 安装时按提示选择访问端口和数据库。SQLite 无需额外数据库服务；MySQL/PostgreSQL 需要准备可访问的数据库和账号。脚本可能预填数据库配置，网页仍需确认连接并完成初始化。
 
 访问 http://服务器IP:9810（端口以安装时选择为准）。英文向导使用 --language en；跟随浏览器语言使用 --language auto，网页可手动切换。
 
-脚本会选择并校验发布镜像；默认镜像仓库为 ghcr.io/owo10086/sni-panel。新版本镜像尚未构建完成时不要强行替换正在运行的容器。
+脚本会选择并校验发布镜像；默认镜像仓库为 ghcr.io/touhounetwork/sni-panel。新版本镜像尚未构建完成时不要强行替换正在运行的容器。
 
 ## 数据与配置
 
@@ -63,7 +63,7 @@ docker restart forwardx-panel
 已有新版管理命令时可使用 `fwxm panel upgrade`；否则执行下方入口脚本。
 
 ~~~bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
 ~~~
 
 升级会保留数据和脚本识别的核心配置，但脚本会重新生成 Compose 和 .env，**不会原样保留所有手动追加的内容**。升级前备份配置并核对自定义挂载、网络和环境变量。完整流程见 [升级与备份](./upgrade-backup.md)。
@@ -75,7 +75,7 @@ curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/ins
 ~~~bash
 sudo mkdir -p /opt/forwardx-compose
 cd /opt/forwardx-compose
-sudo curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/docker-compose.yml -o docker-compose.yml
+sudo curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/docker-compose.yml -o docker-compose.yml
 openssl rand -hex 32
 ~~~
 
@@ -84,7 +84,7 @@ openssl rand -hex 32
 ~~~ini
 COMPOSE_PROJECT_NAME=forwardx
 FORWARDX_CONTAINER_NAME=forwardx-panel
-FORWARDX_IMAGE=ghcr.io/owo10086/sni-panel:latest
+FORWARDX_IMAGE=ghcr.io/touhounetwork/sni-panel:latest
 PORT=9810
 FORWARDX_SETUP_LANGUAGE=zh-CN
 JWT_SECRET=替换为随机密钥
@@ -128,7 +128,7 @@ docker exec forwardx-panel node -p 'require("./package.json").version'
 下面是格式示例，mirror.example.com 必须替换为你信任且实际可用的加速站：
 
 ~~~bash
-curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh" \
+curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh" \
   | bash -s -- install --language zh-CN --github-accelerator "https://mirror.example.com"
 ~~~
 

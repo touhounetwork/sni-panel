@@ -70,9 +70,11 @@ test("SNI creation, import, edits and toggles share current domains across resou
     const imported = results[2];
     assert.equal((await admin.getById({ id: first.id })).targetPort, 9443);
     assert.equal((await admin.getById({ id: other.id })).maxConnections, 12);
+    // Both writes land on host 3 port 443 (domains are unique per entry host
+    // and port), so exactly one may win the race.
     const duplicate = await Promise.allSettled([
       admin.update({ id: first.id, sni: "Duplicate.Example.Test." }),
-      admin.create({ forwardGroupId: 21, name: "duplicate", sourcePort: 444, targetIp: "203.0.113.20", targetPort: 443, sni: "duplicate.example.test" }),
+      admin.create({ forwardGroupId: 21, name: "duplicate", sourcePort: 443, targetIp: "203.0.113.20", targetPort: 443, sni: "duplicate.example.test" }),
     ]);
     assert.equal(duplicate.filter(result => result.status === "fulfilled").length, 1);
     assert.match(duplicate.find(result => result.status === "rejected").reason.message, /SNI|域名/);

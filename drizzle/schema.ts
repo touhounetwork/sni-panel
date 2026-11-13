@@ -608,6 +608,8 @@ export const tunnels = table("tunnels", {
   proxyProtocolExitReceive: boolean("proxyProtocolExitReceive").notNull().default(false),
   proxyProtocolExitSend: boolean("proxyProtocolExitSend").notNull().default(false),
   proxyProtocolVersion: int("proxyProtocolVersion").notNull().default(1),
+  // UDP datagrams also carry v2 headers; ForwardX tunnels only.
+  proxyProtocolUdp: boolean("proxyProtocolUdp").notNull().default(false),
   tcpFastOpen: boolean("tcpFastOpen").notNull().default(false),
   udpOverTcp: boolean("udpOverTcp").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
@@ -887,6 +889,51 @@ export const hostAvailabilityIntervals = table("host_availability_intervals", {
   offlineIncident: int("offlineIncident").notNull().default(0),
   startAt: epoch("startAt").notNull(),
   endAt: epoch("endAt").notNull(),
+});
+
+export const commandBatches = table("command_batches", {
+  id: serial("id"),
+  command: longtext("command").notNull(),
+  timeoutSeconds: int("timeoutSeconds").notNull(),
+  createdBy: int("createdBy"),
+  createdByName: varchar("createdByName", { length: 255 }),
+  hostCount: int("hostCount").notNull(),
+  createdAt: epoch("createdAt").notNull(),
+  cancelledAt: epoch("cancelledAt"),
+});
+
+export const commandBatchResults = table("command_batch_results", {
+  id: serial("id"),
+  batchId: int("batchId").notNull(),
+  hostId: int("hostId").notNull(),
+  hostName: varchar("hostName", { length: 255 }).notNull(),
+  taskId: varchar("taskId", { length: 64 }).notNull().unique(),
+  status: varchar("status", { length: 16 }).notNull(),
+  exitCode: int("exitCode"),
+  durationMs: int("durationMs"),
+  output: longtext("output"),
+  outputTruncated: boolean("outputTruncated").notNull().default(false),
+  startedAt: epoch("startedAt"),
+  finishedAt: epoch("finishedAt"),
+  deadlineAt: epoch("deadlineAt").notNull(),
+  updatedAt: epoch("updatedAt").notNull(),
+});
+
+export const hostInstallHooks = table("host_install_hooks", {
+  id: serial("id"),
+  hostId: int("hostId").notNull().unique(),
+  mode: varchar("mode", { length: 16 }).notNull().default("inherit"),
+  command: longtext("command"),
+  lastRunAt: epoch("lastRunAt"),
+  lastRunMode: varchar("lastRunMode", { length: 16 }),
+  lastAgentVersion: varchar("lastAgentVersion", { length: 32 }),
+  lastSource: varchar("lastSource", { length: 16 }),
+  lastExitCode: int("lastExitCode"),
+  lastTimedOut: boolean("lastTimedOut").notNull().default(false),
+  lastDurationMs: int("lastDurationMs"),
+  lastOutput: longtext("lastOutput"),
+  lastOutputTruncated: boolean("lastOutputTruncated").notNull().default(false),
+  updatedAt: epoch("updatedAt").notNull(),
 });
 
 export const hostProbeServiceStats = table("host_probe_service_stats", {

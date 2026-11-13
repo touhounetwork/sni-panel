@@ -98,8 +98,9 @@ export async function getDirectTunnelSniEntryPortState(options: {
   const sniRows = activeRows.filter((rule) => !!normalizeSniValue(rule.sni));
   const sameTunnelRows = sniRows.filter((rule) => Number(rule.tunnelId || 0) === tunnelId);
   const normalizedSni = normalizeSniValue(options.sni);
+  // Disabled rules still count: enabling one must not create a duplicate.
   const duplicateRule = normalizedSni
-    ? rows.find((rule) => (
+    ? portRows.find((rule) => (
       normalizeSniValue(rule.sni) === normalizedSni
     )) || null
     : null;
@@ -121,7 +122,8 @@ export async function getDirectTunnelSniEntryPortState(options: {
 }
 
 /**
- * 域名维度的唯一性：同一台入口主机上完整域名唯一，跨端口、跨承载资源都算重复。
+ * 域名维度的唯一性：同一台入口主机的同一入口端口内完整域名唯一（含默认去向 `*`），
+ * 跨承载资源也算重复；不同入口端口各有一张分流表，允许相同域名指向不同落地。
  * 表单的实时预检只问这一件事——入口端口被谁占用是端口维度的判定，SNI 分流组
  * 共用入口端口是设计本身（ADR-0002），放进预检只会让端口错误显示在域名框下。
  */

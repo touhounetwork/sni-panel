@@ -5,17 +5,17 @@
 通过轻量 Agent 统一管理多台 Linux 服务器的端口转发、加密隧道、故障转移、用户与套餐。面板负责管理，业务流量由被管理主机上的运行时转发；面板不保存主机 SSH 密钥。
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/owo10086/sni-panel?display_name=tag&sort=semver)](https://github.com/owo10086/sni-panel/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/touhounetwork/sni-panel?display_name=tag&sort=semver)](https://github.com/touhounetwork/sni-panel/releases/latest)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-[使用文档](https://owo10086.github.io/sni-panel/) · [发布下载](https://github.com/owo10086/sni-panel/releases/latest) · [中文更新日志](CHANGELOG.md) · [English changelog](CHANGELOG.en.md) · [Telegram 群组](https://t.me/ForwardX_panel)
+[使用文档](https://touhounetwork.github.io/sni-panel/) · [发布下载](https://github.com/touhounetwork/sni-panel/releases/latest) · [中文更新日志](CHANGELOG.md) · [English changelog](CHANGELOG.en.md) · [Telegram 群组](https://t.me/ForwardX_panel)
 
-- [使用文档](https://owo10086.github.io/sni-panel/)
-- [GitHub Releases](https://github.com/owo10086/sni-panel/releases/latest)
+- [使用文档](https://touhounetwork.github.io/sni-panel/)
+- [GitHub Releases](https://github.com/touhounetwork/sni-panel/releases/latest)
 - [更新日志（中文）](CHANGELOG.md) · [Changelog (English)](CHANGELOG.en.md)
 - [Telegram 群组](https://t.me/ForwardX_panel)
-- [Android APK](https://github.com/owo10086/sni-panel/releases/latest)
+- [Android APK](https://github.com/touhounetwork/sni-panel/releases/latest)
 
 ## 功能概览
 
@@ -59,7 +59,7 @@
 安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language zh-CN
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- install --language zh-CN
 ```
 
 默认目录 `/opt/forwardx-docker`，容器 `forwardx-panel`；宿主机端口映射容器 `3000`。数据库配置、SQLite 和其他持久化数据位于部署目录的 `forwardx-data/`，挂载到容器 `/data`；旧部署可能使用命名卷，请先核对实际挂载。
@@ -67,12 +67,12 @@ curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/ins
 ### Linux 本地安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- install --language zh-CN
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- install --language zh-CN
 ```
 
 默认目录 `/opt/forwardx-panel`，数据目录 `/opt/forwardx-panel/data`，服务 `forwardx-panel`；支持 systemd / OpenRC / SysV。安装器准备 Node.js 22+ 和 pnpm，并安装 Release 发布包。
 
-Docker 默认使用 `ghcr.io/owo10086/sni-panel` 仓库，由脚本选择并校验发布镜像。数据库配置和 SQLite 数据在部署目录的 `forwardx-data/` 中，挂载到容器 `/data`；旧版命名卷升级时会复制到该目录。升级保留数据和脚本识别的核心配置，但会重新生成 Compose 与 `.env`；自定义环境、网络和挂载需备份并核对。卸载脚本经确认后会删除容器、部署目录及其中数据，并处理旧数据卷。
+Docker 默认使用 `ghcr.io/touhounetwork/sni-panel` 仓库，由脚本选择并校验发布镜像。数据库配置和 SQLite 数据在部署目录的 `forwardx-data/` 中，挂载到容器 `/data`；旧版命名卷升级时会复制到该目录。升级保留数据和脚本识别的核心配置，但会重新生成 Compose 与 `.env`；自定义环境、网络和挂载需备份并核对。卸载脚本经确认后会删除容器、部署目录及其中数据，并处理旧数据卷。
 
 1. 打开 `http://服务器IP:9810`，核对数据库并创建首个管理员。复用旧数据库时使用原账号。
 2. 配置 [HTTPS 与反向代理](docs/guide/reverse-proxy.md)，在系统设置填写 Agent 可访问的面板公开地址。
@@ -83,7 +83,7 @@ Docker 默认使用 `ghcr.io/owo10086/sni-panel` 仓库，由脚本选择并校�
 Agent 安装示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh -o /tmp/forwardx-install-agent.sh
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh -o /tmp/forwardx-install-agent.sh
 PANEL_URL='https://panel.example.com' bash /tmp/forwardx-install-agent.sh install YOUR_AGENT_TOKEN
 ```
 
@@ -116,7 +116,7 @@ fwxm agent restart
 
 ```bash
 curl --proxy 'socks5h://127.0.0.1:1080' -fsSL \
-  https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh \
+  https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh \
   -o /tmp/forwardx-install-agent.sh
 
 PANEL_URL='https://panel.example.com' bash /tmp/forwardx-install-agent.sh \
@@ -148,9 +148,9 @@ fwxm agent upgrade
 
 ```bash
 # Docker 面板
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
 # 本地面板
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
 ```
 
 原地升级会重启服务或重建容器，不保证业务不断。脚本保留数据和识别的核心配置，但会重写 `.env` / Compose，自定义环境、挂载与服务配置需备份核对。数据库已升级时，换回旧程序不等于安全回退。
@@ -170,7 +170,7 @@ GitHub 访问受限时使用 [可信加速站](docs/guide/deploy-docker.md#githu
 | 账户与通知 | [用户套餐](docs/guide/users-billing.md) · [通知](docs/guide/notifications.md) · [工单](docs/guide/support-tickets.md) · [推广](docs/guide/affiliates.md) |
 | 扩展与恢复 | [Google 登录](docs/guide/google-login.md) · [AI](docs/guide/ai-assistant.md) · [插件](docs/guide/plugins.md) · [迁移](docs/guide/migration.md) · [排障](docs/guide/troubleshooting.md) |
 
-数据库地址、反向代理和升级相关变量见[环境变量文档](https://owo10086.github.io/sni-panel/guide/env-vars)。MySQL/PostgreSQL 连接池由面板根据主机数量自动管理。常用变量如下（路径为容器/程序默认值，本地安装器会覆盖；Docker `.env` 中新增变量还需由 Compose 映射到容器）：
+数据库地址、反向代理和升级相关变量见[环境变量文档](https://touhounetwork.github.io/sni-panel/guide/env-vars)。MySQL/PostgreSQL 连接池由面板根据主机数量自动管理。常用变量如下（路径为容器/程序默认值，本地安装器会覆盖；Docker `.env` 中新增变量还需由 Compose 映射到容器）：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -181,7 +181,7 @@ GitHub 访问受限时使用 [可信加速站](docs/guide/deploy-docker.md#githu
 | `JWT_SECRET` | 自动生成 | 登录签名密钥；生产环境应固定配置 |
 | `TELEGRAM_BOT_TOKEN` | 空 | Telegram 机器人 Token |
 | `DISCORD_BOT_TOKEN` | 空 | Discord 机器人 Token；在通知设置中选择 Discord 并启用 |
-| `FORWARDX_IMAGE` | `ghcr.io/owo10086/sni-panel:latest` | Docker 镜像 |
+| `FORWARDX_IMAGE` | `ghcr.io/touhounetwork/sni-panel:latest` | Docker 镜像 |
 
 ## 界面语言
 
@@ -220,17 +220,17 @@ ForwardX Agent also includes the third-party userspace WireGuard implementation 
 
 ## Star 趋势
 
-<a href="https://star-history.com/#owo10086/sni-panel&amp;Date">
+<a href="https://star-history.com/#touhounetwork/sni-panel&amp;Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=owo10086/sni-panel&amp;type=Date&amp;theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=owo10086/sni-panel&amp;type=Date" />
-    <img alt="sni-panel Star History" src="https://api.star-history.com/svg?repos=owo10086/sni-panel&amp;type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=touhounetwork/sni-panel&amp;type=Date&amp;theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=touhounetwork/sni-panel&amp;type=Date" />
+    <img alt="sni-panel Star History" src="https://api.star-history.com/svg?repos=touhounetwork/sni-panel&amp;type=Date" />
   </picture>
 </a>
 
 ## 3.5.1：规则显示与 SNI 独立分类
 
-面板更新为 3.5.1，Agent／FXP 保持 3.5.0。新增独立的「sni规则组」，普通「全部」排除 SNI；域名缺失提示直接显示在相关组头下。优化资源展开、流量详情、更多菜单与行内延迟重测，保留本地入口健康、DDNS、计费和权限判断。从 3.5.0 升级只需更新面板，更早版本仍须按说明升级配套 Agent／FXP。发布附件以[本项目 Releases](https://github.com/owo10086/sni-panel/releases/tag/v3.5.1)为准；兼容与验证边界见[版本说明](docs/guide/releases.md)。
+面板更新为 3.5.1，Agent／FXP 保持 3.5.0。新增独立的「sni规则组」，普通「全部」排除 SNI；域名缺失提示直接显示在相关组头下。优化资源展开、流量详情、更多菜单与行内延迟重测，保留本地入口健康、DDNS、计费和权限判断。从 3.5.0 升级只需更新面板，更早版本仍须按说明升级配套 Agent／FXP。发布附件以[本项目 Releases](https://github.com/touhounetwork/sni-panel/releases/tag/v3.5.1)为准；兼容与验证边界见[版本说明](docs/guide/releases.md)。
 
 [Agent proxy](docs/guide/agent-proxy-manager.en.md) · [SSH management](docs/guide/ssh-management.md) · [Affiliates](docs/guide/affiliates.md) · [Support tickets](docs/guide/support-tickets.md)
 

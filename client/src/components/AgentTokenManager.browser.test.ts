@@ -195,7 +195,7 @@ test("browser: real AgentTokenManager installation copies use fresh binding and 
       await until(`(() => {const el=${expression},r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0 && r.height>0 && r.left>=-1 && r.right<=innerWidth+1 && r.top>=-1 && r.bottom<=innerHeight+1 && s.visibility==='visible' && s.display!=='none';})()`);
     };
     const assertCommand = (text: string, token: string) => {
-      assert.ok(text.includes("https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-agent.sh"), "copied command retains the sni-panel source");
+      assert.ok(text.includes("https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-agent.sh"), "copied command retains the sni-panel source");
       assert.ok(text.includes(`${publicPanelUrl}/api/agent/install.sh`), `panel fallback remains in the copied command: ${text}`);
       assert.equal(text.split(`install ${token}`).length - 1, 2, "both command alternatives use the latest server token");
       assert.ok(text.includes(publicPanelUrl));

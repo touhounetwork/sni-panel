@@ -406,6 +406,15 @@ export function pushAgentSupportBundle(hostId: number, taskId: string) {
   return sendAgentEvent(hostId, "agent-support-bundle", { taskId, requestedAt: new Date().toISOString() });
 }
 
+// Only the task id travels on the event stream; the Agent pulls the command.
+export function pushAgentCommandTask(hostId: number, taskId: string) {
+  return sendAgentEvent(hostId, "agent-command", { taskId });
+}
+
+export function pushAgentCommandCancel(hostId: number, taskId: string) {
+  return sendAgentEvent(hostId, "agent-command-cancel", { taskId });
+}
+
 export function markHostMetricsWatching(hostIds: number[], ttlMs = 6000, now = Date.now()) {
   const newlyWatched: number[] = [];
   const until = now + ttlMs;

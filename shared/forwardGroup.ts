@@ -1,6 +1,3 @@
-/** Maximum members for group modes that expand into an ordered host chain. */
-export const MAX_FORWARD_GROUP_MEMBERS = 20;
-
 /** Current failover route first; chain ordering must remain unchanged. */
 export function forwardGroupRouteMembers(group: any): any[] {
   const activeId = Number(group?.activeMemberId || 0);

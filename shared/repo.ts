@@ -7,7 +7,7 @@
  *
  * 注意：Go module 路径与插件商店元数据不由此处派生，见 .scratch/2026-09-13_发布与品牌更名/spec.md。
  */
-export const GITHUB_OWNER = "owo10086";
+export const GITHUB_OWNER = "touhounetwork";
 export const GITHUB_REPO = "sni-panel";
 export const GITHUB_SLUG = `${GITHUB_OWNER}/${GITHUB_REPO}`;
 

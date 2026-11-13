@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { effectiveTunnelProxyProtocolOptions, gostProxyProtocolMetadata, gostTunnelProxyProtocolPlan, resolveRuleProxyProtocolOptions } from "./gostProxyProtocol";
+import { forwardXUdpProxyProtocolFields } from "./sniProxyProtocol";
 
 test("serializes GOST PROXY Protocol versions as metadata strings", () => {
   assert.deepEqual(gostProxyProtocolMetadata(1), { proxyProtocol: "1" });
@@ -101,6 +102,7 @@ test("uses tunnel PROXY Protocol settings over a stale tunnel-rule snapshot", ()
     proxyProtocolExitReceive: true,
     proxyProtocolExitSend: true,
     proxyProtocolVersion: 2,
+    proxyProtocolUdp: false,
   });
 });
 
@@ -116,6 +118,7 @@ test("keeps direct rule settings and disables PROXY Protocol for unsupported tun
     proxyProtocolExitReceive: false,
     proxyProtocolExitSend: false,
     proxyProtocolVersion: 2,
+    proxyProtocolUdp: false,
   });
 
   assert.deepEqual(resolveRuleProxyProtocolOptions({ protocol: "udp", tunnelId: 8 }, {
@@ -130,5 +133,43 @@ test("keeps direct rule settings and disables PROXY Protocol for unsupported tun
     proxyProtocolExitReceive: false,
     proxyProtocolExitSend: false,
     proxyProtocolVersion: 1,
+    proxyProtocolUdp: false,
   });
+});
+
+test("UDP rules get PROXY switches only on ForwardX tunnels with the UDP switch and v2", () => {
+  const forwardx = { id: 9, mode: "forwardx", proxyProtocolReceive: true, proxyProtocolSend: true, proxyProtocolExitReceive: true, proxyProtocolExitSend: true, proxyProtocolVersion: 2, proxyProtocolUdp: true };
+  for (const protocol of ["udp", "both"]) {
+    assert.deepEqual(resolveRuleProxyProtocolOptions({ protocol, tunnelId: 9 }, forwardx), {
+      proxyProtocolReceive: true,
+      proxyProtocolSend: true,
+      proxyProtocolExitReceive: true,
+      proxyProtocolExitSend: true,
+      proxyProtocolVersion: 2,
+      proxyProtocolUdp: true,
+    }, protocol);
+  }
+  assert.equal(resolveRuleProxyProtocolOptions({ protocol: "tcp", tunnelId: 9 }, forwardx).proxyProtocolUdp, false);
+  for (const tunnel of [
+    { ...forwardx, proxyProtocolUdp: false },
+    { ...forwardx, proxyProtocolVersion: 1 },
+    { ...forwardx, mode: "tls" },
+  ]) {
+    const options = resolveRuleProxyProtocolOptions({ protocol: "udp", tunnelId: 9 }, tunnel);
+    assert.equal(options.proxyProtocolSend, false, JSON.stringify(tunnel));
+    assert.equal(options.proxyProtocolUdp, false);
+  }
+});
+
+test("UDP PROXY is withheld from ForwardX entries older than 3.10.0", () => {
+  const tunnel = { mode: "forwardx", proxyProtocolSend: true, proxyProtocolExitSend: true, proxyProtocolVersion: 2, proxyProtocolUdp: true };
+  assert.deepEqual(forwardXUdpProxyProtocolFields({ protocol: "udp" }, tunnel, "3.10.0"), { proxyProtocolUdp: true });
+  assert.deepEqual(forwardXUdpProxyProtocolFields({ protocol: "both" }, tunnel, "3.10.0"), { proxyProtocolUdp: true });
+  // An old entry rejects any PROXY switch on a UDP-only rule, taking the port down.
+  assert.deepEqual(forwardXUdpProxyProtocolFields({ protocol: "udp" }, tunnel, "3.9.0"), {
+    proxyProtocolReceive: false, proxyProtocolSend: false, proxyProtocolExitReceive: false, proxyProtocolExitSend: false,
+  });
+  // TCP+UDP keeps the TCP behaviour; the old entry never sees the UDP field.
+  assert.deepEqual(forwardXUdpProxyProtocolFields({ protocol: "both" }, tunnel, "3.9.0"), {});
+  assert.deepEqual(forwardXUdpProxyProtocolFields({ protocol: "udp" }, { ...tunnel, proxyProtocolUdp: false }, "3.9.0"), {});
 });

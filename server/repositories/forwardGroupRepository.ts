@@ -101,7 +101,7 @@ import { nextPortEntrySyncDiagnostic, parsePortEntrySyncDiagnostic } from "../..
 import { portForwardToolPreflight, missingPortForwardToolMessage } from "../portForwardToolPreflight";
 import { normalizePositiveIds, normalizeSniValue, sqlBool } from "./repositoryUtils";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
+import { forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { getLastAuthenticatedAgentActivity } from "../agentActivity";
 import { assertNoDirectSelfForwardLoop } from "../directForwardLoop";
 import { hostTrafficExcluded } from "../../shared/hostTrafficPolicy";
@@ -252,6 +252,17 @@ export type ForwardGroupSniEntryPortState = {
   anySniRule: ForwardGroupSniRuleRow | null;
 };
 
+function sniMemberProxyProtocolFields(templateRule: any) {
+  const send = dbBool(templateRule?.proxyProtocolSend);
+  return {
+    proxyProtocolReceive: dbBool(templateRule?.proxyProtocolReceive),
+    proxyProtocolSend: send,
+    proxyProtocolExitReceive: false,
+    proxyProtocolExitSend: false,
+    proxyProtocolVersion: send && Number(templateRule?.proxyProtocolVersion) === 2 ? 2 : 1,
+  };
+}
+
 export async function getForwardGroupSniEntryPortState(options: {
   groupId: number;
   sourcePort: number;
@@ -312,11 +323,14 @@ export async function getForwardGroupSniEntryPortState(options: {
           inArray(forwardRules.tunnelId, directTunnelIds),
         )
       : inArray(forwardRules.hostId, entryHostIds);
+    // Each entry port runs its own splitter with its own table, so a domain
+    // only has to be unique on (entry host, entry port).
     duplicateRows = await db.select(forwardGroupSniDuplicateRuleSelection)
       .from(forwardRules)
       .leftJoin(forwardGroups, eq(forwardGroups.id, forwardRules.forwardGroupId))
       .where(and(
         duplicateScope,
+        eq(forwardRules.sourcePort, sourcePort),
         eq(forwardRules.pendingDelete, false),
         ...(excludedIds.length > 0 ? [notInArray(forwardRules.id, excludedIds)] : []),
       )) as ForwardGroupSniDuplicateRuleRow[];
@@ -889,26 +903,22 @@ function supportsChinaHealthMode(mode: ForwardGroupMode) {
 
 function validateForwardGroupModeMembers(groupMode: ForwardGroupMode, groupType: string, members: ForwardGroupMemberInput[], options: { externalEntry?: boolean } = {}) {
   if (groupMode === "port") {
-    if (options.externalEntry ? (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) : members.length !== 1) throw new Error("端口转发需要配置单台主机或有效入口组");
+    if (options.externalEntry ? members.length < 1 : members.length !== 1) throw new Error("端口转发需要配置单台主机或有效入口组");
     if (String(groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
   if (groupMode === "chain") {
     const minMembers = options.externalEntry ? 1 : 2;
-    if (members.length < minMembers || members.length > MAX_FORWARD_GROUP_MEMBERS) {
-      throw new Error(options.externalEntry
-        ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} hosts`
-        : `Port forwarding chain requires 2-${MAX_FORWARD_GROUP_MEMBERS} hosts`);
+    if (members.length < minMembers) {
+      throw new Error(`Port forwarding chain requires at least ${minMembers} hosts`);
     }
     if (groupType !== "host") throw new Error("Port forwarding chain only supports host members");
     if (members.some((member) => member.memberType !== "host")) throw new Error("Port forwarding chain only supports host members");
     return;
   }
   if (isCollectionGroupMode(groupMode)) {
-    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) {
-      throw new Error(groupMode === "entry"
-        ? `入口组需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台主机`
-        : `出口组需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台主机`);
+    if (members.length < 1) {
+      throw new Error(groupMode === "entry" ? "入口组至少需要配置 1 台主机" : "出口组至少需要配置 1 台主机");
     }
     if (groupType !== "host") throw new Error(groupMode === "entry" ? "入口组仅支持主机成员" : "出口组仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error(groupMode === "entry" ? "入口组仅支持主机成员" : "出口组仅支持主机成员");
@@ -2589,9 +2599,9 @@ export async function getForwardGroupEntryPortPolicy(groupId: number): Promise<P
   const groupMode = groupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
   const entryMembers = groupMode === "chain" ? await chainEntryMembers(group) : [];
-  if (groupMode === "chain" && (members.length < (entryMembers.length > 0 ? 1 : 2) || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
+  if (groupMode === "chain" && (members.length < (entryMembers.length > 0 ? 1 : 2))) {
     throw new Error(entryMembers.length > 0
-      ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`
+      ? "Port forwarding chain requires at least one enabled host"
       : "Port forwarding chain requires at least two enabled hosts");
   }
 
@@ -2626,9 +2636,9 @@ export async function findAvailableForwardGroupPort(
   const groupMode = groupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
   const entryMembers = groupMode === "chain" ? await chainEntryMembers(group) : [];
-  if (groupMode === "chain" && (members.length < (entryMembers.length > 0 ? 1 : 2) || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
+  if (groupMode === "chain" && (members.length < (entryMembers.length > 0 ? 1 : 2))) {
     throw new Error(entryMembers.length > 0
-      ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`
+      ? "Port forwarding chain requires at least one enabled host"
       : "Port forwarding chain requires at least two enabled hosts");
   }
 
@@ -2704,7 +2714,7 @@ export async function validateForwardGroupRuleConfig(groupId: number, config: Fo
   const groupMode = groupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
   if (groupMode === "port") {
-    if (Number(group.entryGroupId || 0) > 0 ? (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) : members.length !== 1) throw new Error("端口转发需要配置单台主机或有效入口组");
+    if (Number(group.entryGroupId || 0) > 0 ? members.length < 1 : members.length !== 1) throw new Error("端口转发需要配置单台主机或有效入口组");
     if (String(group.groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
@@ -2715,10 +2725,10 @@ export async function validateForwardGroupRuleConfig(groupId: number, config: Fo
     if (String((group as any).groupType || "host") !== "host") {
       throw new Error("Port forwarding chain only supports host members");
     }
-    if (enabledMembers.length < minEnabledMembers || enabledMembers.length > MAX_FORWARD_GROUP_MEMBERS) {
+    if (enabledMembers.length < minEnabledMembers) {
       throw new Error(entryMembers.length > 0
-        ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`
-        : `Port forwarding chain requires 2-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`);
+        ? "Port forwarding chain requires at least one enabled host"
+        : "Port forwarding chain requires at least two enabled hosts");
     }
     const hasExternalEntry = entryMembers.length > 0;
     for (const [index, member] of enabledMembers.entries()) {
@@ -3392,6 +3402,12 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
     }
   }
 
+  // SNI PROXY switches belong to the rule (receive is synchronized per entry
+  // port when saved), not to the group's direct runtime tool.
+  if (normalizeSniValue(payload.sni) && member.memberType !== "tunnel") {
+    Object.assign(payload, sniMemberProxyProtocolFields(templateRule));
+  }
+
   if (existing) {
     if (canPreserveChildRuleRuntime(existing, payload, options, await syncHostById(hostId, resources))) {
       await syncPreservedChildRuleMetadata(existing, payload);
@@ -3816,7 +3832,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
   const activeChainMembers = groupMode === "chain" ? members.filter((member: any) => dbBool(member?.isEnabled)) : members;
 
   if (groupMode === "port") {
-    if (Number(group.entryGroupId || 0) > 0 ? (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) : members.length !== 1) throw new Error("端口转发需要配置单台主机或有效入口组");
+    if (Number(group.entryGroupId || 0) > 0 ? members.length < 1 : members.length !== 1) throw new Error("端口转发需要配置单台主机或有效入口组");
     if (String(group.groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
@@ -3981,10 +3997,10 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
     if (groupMode === "chain") {
       const entryMembers = activeChainEntryMembers;
       const minChainMembers = entryMembers.length > 0 ? 1 : 2;
-      if (activeChainMembers.length < minChainMembers || activeChainMembers.length > MAX_FORWARD_GROUP_MEMBERS) {
+      if (activeChainMembers.length < minChainMembers) {
         throw new Error(entryMembers.length > 0
-          ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`
-          : `Port forwarding chain requires 2-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`);
+          ? "Port forwarding chain requires at least one enabled host"
+          : "Port forwarding chain requires at least two enabled hosts");
       }
       if (options.createMissing === false) {
         const existingListeners = await Promise.all(activeChainMembers.map(async (member: any) => {

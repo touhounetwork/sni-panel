@@ -20,6 +20,17 @@ type CacheOptions = {
   now?: () => number;
 };
 
+// Shared loads must not cross a database transaction boundary. A SQLite
+// transaction owns the only connection; joining a load started outside it
+// waits for a query queued behind that same transaction, a deadlock. Loads
+// inside a transaction may also read uncommitted rows, so they are neither
+// joined nor published. dbRuntime registers its check here to avoid an
+// import cycle.
+let insideIsolatedScope: () => boolean = () => false;
+export function setQueryCacheIsolationCheck(check: () => boolean) {
+  insideIsolatedScope = check;
+}
+
 export class QueryCacheBusyError extends Error {
   constructor() { super("Query cache is busy"); }
 }
@@ -104,10 +115,12 @@ export function createQueryCache(options: number | CacheOptions = 300) {
     if (cached?.value !== undefined && cached.freshUntil > now) {
       return Promise.resolve(cached.value);
     }
+    const isolated = insideIsolatedScope();
     if (cached?.value !== undefined && cached.staleUntil > now) {
-      if (!cached.promise && cached.retryAt <= now) refresh(key, opts, load).catch(() => undefined);
+      if (!isolated && !cached.promise && cached.retryAt <= now) refresh(key, opts, load).catch(() => undefined);
       return Promise.resolve(cached.value);
     }
+    if (isolated) return Promise.resolve().then(load);
     if (cached?.promise) return cached.promise;
     return refresh(key, opts, load);
   }

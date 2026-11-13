@@ -615,9 +615,11 @@ try {
       await db.setSetting("batch-independent-write", "available");
       release.resolve(); await billing;
       assert.equal((await waiting).results[0].status, "fulfilled");
+      // Domains are unique per entry host and port: both contenders target
+      // 18443 (with different destinations) so exactly one may win.
       const concurrent = await Promise.all([
         createBatch({ rules: [ruleInput("race", 0), ruleInput("unique", 0)] }),
-        createBatch({ rules: [ruleInput("race", 0, { sourcePort: 18444 }), ruleInput("unique", 1)] }),
+        createBatch({ rules: [ruleInput("race", 0, { targetPort: 29443 }), ruleInput("unique", 1)] }),
         admin.create(ruleInput("single", 0)),
       ]);
       const outcomes = concurrent.slice(0, 2).flatMap(item => item.results);
@@ -644,7 +646,9 @@ try {
         await insert("forward_group_members", { id: 104, groupId: 10, memberType: "host", hostId: 4, priority: 0, isEnabled: 1 });
       });
       await groupHeld.promise;
-      const pending = createBatch({ rules: [ruleInput("occupied", 0, generic ? { sni: null, sourcePort: 18445 } : {})] });
+      // Same port as the existing rule on host 4: the conflict only appears
+      // once the entry moves there (domains are unique per host and port).
+      const pending = createBatch({ rules: [ruleInput("occupied", 0, generic ? { sni: null, sourcePort: 18445 } : { sourcePort: 18445 })] });
       await new Promise(resolve => setTimeout(resolve, 25));
       groupRelease.resolve(); await moving;
       const afterMove = await pending;

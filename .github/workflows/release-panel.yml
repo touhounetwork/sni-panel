@@ -36,7 +36,7 @@ jobs:
           node-version: '22.23.3'
       - name: Require version tag from the authorized repository
         run: |
-          test "$GITHUB_REPOSITORY" = owo10086/sni-panel
+          test "$GITHUB_REPOSITORY" = touhounetwork/sni-panel
           test "$GITHUB_REF_TYPE" = tag
           node scripts/check-versions.mjs
       - uses: actions/download-artifact@v4
@@ -73,7 +73,7 @@ jobs:
           context: .release/image-context
           file: Dockerfile.release
           platforms: linux/amd64
-          outputs: type=image,name=ghcr.io/owo10086/sni-panel,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/touhounetwork/sni-panel,push-by-digest=true,name-canonical=true,push=true
           build-args: |
             FORWARDX_VERSION=${{ env.VERSION }}
             FORWARDX_COMMIT=${{ github.sha }}
@@ -81,7 +81,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=forwardx-release
       - name: Validate the actual package, native dependencies and image startup by digest
         env:
-          RELEASE_IMAGE: ghcr.io/owo10086/sni-panel@${{ steps.image.outputs.digest }}
+          RELEASE_IMAGE: ghcr.io/touhounetwork/sni-panel@${{ steps.image.outputs.digest }}
         run: |
           node scripts/release/smoke-image.mjs
           node scripts/release/seal.mjs

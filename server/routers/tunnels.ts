@@ -29,6 +29,7 @@ import { normalizeForwardXVersion } from "../../shared/forwardTypes";
 import { AGENT_FORWARDX_WIREGUARD_VERSION, isForwardXWireGuardV2 } from "../forwardXWireGuard";
 import { normalizeForwardXV3Transport } from "../forwardXTransport";
 import { isAgentVersionAtLeast } from "../agentRouteUtils";
+import { assertSniProxyProtocolAgentVersions } from "../sniProxyProtocol";
 import {
   AGENT_FORWARDX_RELAY_FAILOVER_VERSION,
   normalizeTunnelRelayMode,
@@ -76,8 +77,6 @@ const forwardXV3InputFields = {
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
 const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"]);
 const tunnelRelayModeSchema = z.enum(["chain", "failover"]);
-const MAX_TUNNEL_HOPS = 10;
-const MAX_EXTRA_TUNNEL_EXITS = 4;
 const MAX_NGINX_CERT_BYTES = 64 * 1024;
 const tunnelQueryCache = createQueryCache(300);
 
@@ -160,7 +159,14 @@ function normalizeTunnelRuntimeOptions(input: any, mode: unknown) {
     dbBool(input.proxyProtocolExitReceive) ||
     dbBool(input.proxyProtocolExitSend)
   );
+  // Only the ForwardX entry can add or strip a header per datagram; other
+  // tunnel modes drop the switch. v1 has no UDP form, so it is rejected.
+  const proxyProtocolUdp = forwardxMode && proxyAny && dbBool(input.proxyProtocolUdp);
+  if (proxyProtocolUdp && Number(input.proxyProtocolVersion) !== 2) {
+    throw new Error("UDP 的 PROXY Protocol 仅支持 v2：v1 没有 UDP 格式");
+  }
   return {
+    proxyProtocolUdp,
     proxyProtocolReceive: proxySupported && dbBool(input.proxyProtocolReceive),
     proxyProtocolSend: proxySupported && dbBool(input.proxyProtocolSend),
     proxyProtocolExitReceive: proxySupported && dbBool(input.proxyProtocolExitReceive),
@@ -470,7 +476,6 @@ async function buildExtraExitNodes(ctx: any, options: {
   if (!options.enabled) return [];
   const raw = Array.isArray(options.exits) ? options.exits : [];
   if (raw.length === 0) throw new Error("开启多出口负载后至少需要添加 1 个额外出口");
-  if (raw.length > MAX_EXTRA_TUNNEL_EXITS) throw new Error(`多出口负载最多可额外添加 ${MAX_EXTRA_TUNNEL_EXITS} 个出口`);
   const seen = new Set<number>([
     Number(options.primaryHostId),
     ...(options.blockedHostIds || []).map((id) => Number(id || 0)),
@@ -957,6 +962,7 @@ export const tunnelsRouter = router({
         proxyProtocolExitReceive: z.boolean().optional().default(false),
         proxyProtocolExitSend: z.boolean().optional().default(false),
         proxyProtocolVersion: proxyProtocolVersionSchema.optional().default(1),
+        proxyProtocolUdp: z.boolean().optional().default(false),
         tcpFastOpen: z.boolean().optional().default(false),
         udpOverTcp: z.boolean().optional().default(false),
         blockHttp: z.boolean().optional().default(false),
@@ -964,9 +970,9 @@ export const tunnelsRouter = router({
         blockTls: z.boolean().optional().default(false),
         loadBalanceEnabled: z.boolean().optional().default(false),
         loadBalanceStrategy: tunnelLoadBalanceStrategySchema.optional().default("round_robin"),
-        loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).max(MAX_EXTRA_TUNNEL_EXITS).optional(),
+        loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).optional(),
         hopHostIds: z.array(z.number()).optional(),
-        hopConnectHosts: z.array(z.string().max(128).nullable()).optional(),
+        hopConnectHosts: z.array(z.string().nullable()).optional(),
       }))
       .mutation(async ({ input, ctx }) => db.withDatabaseTransaction(async () => {
         const heldReservations: HostPortReservation[] = [];
@@ -981,7 +987,6 @@ export const tunnelsRouter = router({
         const relayMode = normalizeTunnelRelayMode(input.relayMode);
         if (hopHostIds) {
           // Multi-hop tunnel: validate hosts
-          if (hopHostIds.length > MAX_TUNNEL_HOPS) throw new Error(`多级隧道最多支持 ${MAX_TUNNEL_HOPS} 级`);
           if (new Set(hopHostIds).size !== hopHostIds.length) throw new Error("多级隧道中的主机不能重复");
           for (const hostId of hopHostIds) await requireHostAccess(ctx, hostId);
           if (input.listenPort !== 0) throw new Error("多级隧道端口由系统自动分配");
@@ -1073,6 +1078,12 @@ export const tunnelsRouter = router({
           await requireForwardXRelayFailoverAgentVersions(entryHostIds);
         }
         const runtimeOptions = normalizeTunnelRuntimeOptions(input, normalizedMode);
+        if (runtimeOptions.proxyProtocolUdp) {
+          await assertSniProxyProtocolAgentVersions(await getTunnelEntryTestHostIds({
+            entryGroupId: input.entryGroupId ?? null,
+            entryHostId,
+          }));
+        }
         if (runtimeOptions.udpOverTcp) {
           const entryHostIds = await getTunnelEntryTestHostIds({
             entryGroupId: input.entryGroupId ?? null,
@@ -1209,6 +1220,7 @@ export const tunnelsRouter = router({
         proxyProtocolExitReceive: z.boolean().optional(),
         proxyProtocolExitSend: z.boolean().optional(),
         proxyProtocolVersion: proxyProtocolVersionSchema.optional(),
+        proxyProtocolUdp: z.boolean().optional(),
         tcpFastOpen: z.boolean().optional(),
         udpOverTcp: z.boolean().optional(),
         blockHttp: z.boolean().optional(),
@@ -1216,10 +1228,10 @@ export const tunnelsRouter = router({
         blockTls: z.boolean().optional(),
         loadBalanceEnabled: z.boolean().optional(),
         loadBalanceStrategy: tunnelLoadBalanceStrategySchema.optional(),
-        loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).max(MAX_EXTRA_TUNNEL_EXITS).optional(),
+        loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).optional(),
         isEnabled: z.boolean().optional(),
         hopHostIds: z.array(z.number()).optional(),
-        hopConnectHosts: z.array(z.string().max(128).nullable()).optional(),
+        hopConnectHosts: z.array(z.string().nullable()).optional(),
       }))
       .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.id}`, async () => db.withDatabaseTransaction(async () => {
         const heldReservations: HostPortReservation[] = [];
@@ -1266,7 +1278,6 @@ export const tunnelsRouter = router({
         const hopHostIds = requestedHopHostIds && requestedHopHostIds.length >= 3 ? requestedHopHostIds : null;
         const switchToRegular = requestedHopHostIds !== undefined && requestedHopHostIds.length <= 2;
         if (hopHostIds) {
-          if (hopHostIds.length > MAX_TUNNEL_HOPS) throw new Error(`多级隧道最多支持 ${MAX_TUNNEL_HOPS} 级`);
           if (new Set(hopHostIds).size !== hopHostIds.length) throw new Error("多级隧道中的主机不能重复");
           for (const hostId of hopHostIds) await requireHostAccess(ctx, hostId);
         }
@@ -1344,6 +1355,7 @@ export const tunnelsRouter = router({
           "proxyProtocolExitReceive",
           "proxyProtocolExitSend",
           "proxyProtocolVersion",
+          "proxyProtocolUdp",
           "tcpFastOpen",
           "udpOverTcp",
         ] as const;
@@ -1354,6 +1366,12 @@ export const tunnelsRouter = router({
             runtimeSource[key] = (data as any)[key] !== undefined ? (data as any)[key] : (tunnel as any)[key];
           }
           Object.assign(data as any, normalizeTunnelRuntimeOptions(runtimeSource, nextModeForRuntime));
+          if ((data as any).proxyProtocolUdp && !dbBool((tunnel as any).proxyProtocolUdp)) {
+            await assertSniProxyProtocolAgentVersions(await getTunnelEntryTestHostIds({
+              entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId ?? null,
+              entryHostId: Number((data as any).entryHostId ?? (tunnel as any).entryHostId),
+            }));
+          }
         }
         const modeChanged = (data as any).mode !== undefined && nextModeForRuntime !== normalizeTunnelMode((tunnel as any).mode);
         const forwardXVersionChanged = nextForwardXVersion !== normalizeForwardXVersion((tunnel as any).forwardxVersion);

@@ -187,7 +187,9 @@ const MIGRATION_RUNTIME_TIMEOUT_MS = Math.max(
     : 15 * 60 * 1000,
 );
 const MIGRATION_RUNTIME_POLL_MS = 2_000;
-const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set(["agent_traffic_reports", "operations_traffic_daily", "operations_source_daily", "operations_source_status", "operations_ip_geo"]);
+// Tables added after a source panel's version may be absent; the copy skips them.
+const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set(["agent_traffic_reports", "operations_traffic_daily", "operations_source_daily", "operations_source_status", "operations_ip_geo",
+  "host_install_hooks", "command_batches", "command_batch_results"]);
 
 function normalizePanelUrl(url: string) {
   const value = url.trim().replace(/\/+$/, "");
@@ -213,6 +215,8 @@ export function hasActivePanelMigration() {
 export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABLES)[number]>([
   "host_metrics",
   "host_availability_intervals",
+  // Operator commands and their last output; rerun on the next install.
+  "host_install_hooks",
   "host_probe_service_stats",
   "tunnel_latency_stats",
   "forward_group_latency_stats",
@@ -735,6 +739,7 @@ const IMPORT_TABLE_ORDER = [
   "host_probe_services",
   "host_metrics",
   "host_availability_intervals",
+  "host_install_hooks",
   "host_probe_service_stats",
   "host_traffic_counters",
   "user_traffic_counters",
@@ -797,6 +802,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "resource_traffic_baselines",
   "host_metrics",
   "host_availability_intervals",
+  "host_install_hooks",
   "host_probe_service_stats",
   "host_traffic_counters",
   "user_traffic_counters",

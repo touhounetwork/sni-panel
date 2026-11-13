@@ -1,4 +1,5 @@
 import { SniDomainWarnings } from "@/components/rules/SniDomainWarnings";
+import { SniProxyProtocolFields, type SniProxyProtocolValue } from "@/components/rules/SniProxyProtocolFields";
 import { getFormatLocale } from "@/i18n";
 import { t as translateText } from "@/i18n";
 import { HintSwitch } from "@/components/ui/hint-switch";
@@ -2099,7 +2100,6 @@ function buildRuleTransferFiles(
 function normalizeFailoverTargetsForSubmit(text: string) {
   const targets: Array<{ targetIp: string; targetPort: number }> = [];
   const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length > 10) return { error: translateText("备用出站最多支持 10 个") };
   for (let index = 0; index < lines.length; index += 1) {
     const parsed = splitFailoverTargetLine(lines[index]);
     if (!parsed) continue;
@@ -2188,6 +2188,9 @@ function RulesContent() {
   const [resetTrafficTarget, setResetTrafficTarget] = useState<{ scope: "all" } | { scope: "rule"; rule: any } | null>(null);
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [form, setForm] = useState<RuleFormData>(defaultForm);
+  const handleSniProxyProtocolChange = useCallback((patch: Partial<SniProxyProtocolValue>) => {
+    setForm((current) => ({ ...current, ...patch }));
+  }, []);
   useEffect(() => {
     if (showDialog && !editingId) setForm(prev => ({ ...prev, limits: newRuleLimitsForm() }));
   }, [showDialog, editingId]);
@@ -2967,7 +2970,9 @@ function RulesContent() {
     if (portStatus === "used") {
       return {
         type: "used" as const,
-        text: portRangeError ? translateText("超范围") : translateText("不可用"),
+        // The reason may be any conflict (e.g. a duplicate SNI); only range
+        // violations read as "out of range".
+        text: portRangeError && /必须在/.test(portRangeError) ? translateText("超范围") : translateText("不可用"),
         title: portRangeError || translateText("端口已被占用"),
       };
     }
@@ -3961,6 +3966,9 @@ function RulesContent() {
       recoverSeconds: form.recoverSeconds || 120,
       autoFailback: form.autoFailback,
     };
+    const sniProxyProtocolPayload = submitSni && isForwardGroupRouteMode
+      ? { proxyProtocolReceive: form.proxyProtocolReceive, proxyProtocolSend: form.proxyProtocolSend, proxyProtocolVersion: form.proxyProtocolVersion }
+      : {};
     // SNI 分流不做端口探测，因此这两道闸门在分流形态下没有可依据的状态。
     if (!sniModeOn && !isForwardGroupRouteMode && portStatus === "used") {
       toast.error(translateText("源端口已被占用，请更换端口或使用随机分配"));
@@ -4003,6 +4011,7 @@ function RulesContent() {
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
         ...limitPayload,
+        ...sniProxyProtocolPayload,
       });
     } else {
       createMutation.mutate({
@@ -4025,6 +4034,7 @@ function RulesContent() {
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         ...failoverPayload,
         ...limitPayload,
+        ...sniProxyProtocolPayload,
       });
     }
   };
@@ -8333,10 +8343,21 @@ function RulesContent() {
                     onChange={(e) => setForm({ ...form, sni: e.target.value })}
                     className={sniDomainConflict ? "border-destructive" : ""}
                   />
-                  {sniDomainConflict && (
+                  {sniDomainConflict ? (
                     <p className="text-xs text-destructive">{sniDomainConflict}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{translateText("填 * 表示该入口端口的默认去向：未匹配、无 SNI 或非 TLS 的连接转到这里")}</p>
                   )}
                 </div>
+              )}
+              {sniModeOn && isForwardGroupRouteMode && (
+                <SniProxyProtocolFields
+                  forwardGroupId={form.forwardGroupId ? Number(form.forwardGroupId) : null}
+                  sourcePort={Number(form.sourcePort || 0)}
+                  editingId={editingId || null}
+                  value={form as SniProxyProtocolValue}
+                  onChange={handleSniProxyProtocolChange}
+                />
               )}
               {sniProtocolLocked && (
                 <>

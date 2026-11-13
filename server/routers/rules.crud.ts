@@ -38,7 +38,7 @@ import { mapWithConcurrency } from "../asyncPool";
 import { afterSniRuleWrite, withSniRuleWrite } from "../sniRuleWrite";
 import { reserveRuleCreateQuota, withRuleCreateQuotaLock, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { isAgentVersionAtLeast } from "../agentRouteUtils";
-import { isValidSniValue, normalizeSniValue, SNI_SPLITTER_MIN_AGENT_VERSION } from "@shared/sni";
+import { isValidSniRuleValue, normalizeSniValue, SNI_SPLITTER_MIN_AGENT_VERSION } from "@shared/sni";
 import { isRuleImportPortConflictError } from "@shared/ruleImport";
 import { normalizePositiveIds } from "../repositories/repositoryUtils";
 import {
@@ -52,6 +52,7 @@ import {
   type SniEntryPortState,
 } from "../sniEntryPort";
 import { assertSniEntryAgentVersions } from "../sniEntryPortOverview";
+import { prepareSniRuleProxyProtocol, syncSniPortProxyReceive } from "../sniProxyProtocol";
 import { RuleBatchSaveError } from "../ruleBatchSaveError";
 
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
@@ -72,7 +73,6 @@ const strictFailoverTargetSchema = z.object({
   targetPort: z.number().int().min(1).max(65535),
 });
 const failoverStrategySchema = z.enum(["fallback", "round_robin", "random", "ip_hash"]);
-const MAX_FAILOVER_TARGETS = 10;
 const mainBackupGostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const SNI_BULK_IMPORT_MAX_COUNT = 500;
 const sniInputSchema = z.string().max(1024).nullable().optional();
@@ -112,7 +112,7 @@ export function normalizeSniInput(value: unknown) {
   if (value === undefined || value === null) return null;
   const normalized = normalizeSniValue(value);
   if (!normalized) return null;
-  if (!isValidSniValue(normalized)) {
+  if (!isValidSniRuleValue(normalized)) {
     throw new Error("SNI 域名格式不正确");
   }
   return normalized;
@@ -404,7 +404,7 @@ async function prepareForwardGroupRuntimePorts(options: {
 const failoverInputShape = {
   failoverEnabled: z.boolean().optional(),
   failoverStrategy: failoverStrategySchema.optional(),
-  failoverTargets: z.array(failoverTargetSchema).max(MAX_FAILOVER_TARGETS).optional(),
+  failoverTargets: z.array(failoverTargetSchema).optional(),
   failoverSeconds: z.number().int().min(10).max(3600).optional(),
   recoverSeconds: z.number().int().min(10).max(3600).optional(),
   autoFailback: z.boolean().optional(),
@@ -450,8 +450,7 @@ function parseFailoverTargets(raw: unknown) {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .map((target) => ({ targetIp: String(target?.targetIp || "").trim(), targetPort: Number(target?.targetPort) }))
-      .filter((target) => target.targetIp && target.targetPort >= 1 && target.targetPort <= 65535)
-      .slice(0, MAX_FAILOVER_TARGETS);
+      .filter((target) => target.targetIp && target.targetPort >= 1 && target.targetPort <= 65535);
   } catch {
     return [];
   }
@@ -474,7 +473,6 @@ export function normalizeFailoverInput(input: FailoverInput, protocol?: string |
       const parsed = strictFailoverTargetSchema.safeParse({ targetIp, targetPort });
       if (!parsed.success) throw new Error("备用出站地址或端口格式不正确");
       targets.push(parsed.data);
-      if (targets.length >= MAX_FAILOVER_TARGETS) break;
     }
   }
   if (enabled && targets.length === 0) {
@@ -517,7 +515,7 @@ export function normalizeProxyProtocolInput(input: {
       proxyProtocolVersion: 1,
     };
     if ((dbBool(input.proxyProtocolReceive) || dbBool(input.proxyProtocolSend) || dbBool(input.proxyProtocolExitReceive) || dbBool(input.proxyProtocolExitSend)) && protocol && protocol !== "tcp" && protocol !== "both") {
-      throw new Error("PROXY Protocol 仅支持 TCP 协议");
+      throw new Error("PROXY Protocol 仅支持 TCP 协议；UDP 只能在 ForwardX 隧道上开启（iptables/nftables 在内核转发、无法改写数据报，realm 不支持 UDP，GOST 不能逐个数据报写入头）");
     }
     if ((dbBool(input.proxyProtocolReceive) || dbBool(input.proxyProtocolSend) || dbBool(input.proxyProtocolExitReceive) || dbBool(input.proxyProtocolExitSend)) && !forwardTypeSupported) {
       throw new Error("PROXY Protocol 仅支持 GOST 端口转发、GOST 隧道和自定义加密隧道");
@@ -1797,6 +1795,9 @@ async function createForwardRuleForContext(
         });
       }
       await requireRuleProtocolEnabled({ forwardType, tunnelId: null });
+      const sniProxyProtocol = normalizedSni
+        ? await prepareSniRuleProxyProtocol({ input, sni: normalizedSni, groupMode: group.groupMode, entryHostIds, sourcePort })
+        : null;
       const createTemplateRule = () => db.createForwardRule({
         ...ruleLimitPatch(input),
         personalGroupIds: input.personalGroupIds,
@@ -1824,13 +1825,13 @@ async function createForwardRuleForContext(
         blockHttp: false,
         blockSocks: false,
         blockTls: false,
-        ...normalizeProxyProtocolInput(
+        ...(sniProxyProtocol || normalizeProxyProtocolInput(
           input,
           ruleProtocol,
           forwardType,
           isForwardChain,
           { tunnelRoute: !isForwardChain && group.groupType === "tunnel", clearUnsupported: true },
-        ),
+        )),
         ...normalizeTransportTuningInput(
           input,
           ruleProtocol,
@@ -1856,6 +1857,9 @@ async function createForwardRuleForContext(
       } else {
         id = await createTemplateRule();
         await db.syncForwardGroupRules(forwardGroupId);
+      }
+      if (sniProxyProtocol) {
+        await syncSniPortProxyReceive({ entryHostIds, sourcePort, receive: sniProxyProtocol.proxyProtocolReceive, excludeRuleIds: [id] });
       }
       await quotaReservation?.release();
       quotaReservation = null;
@@ -2684,6 +2688,23 @@ export const crudRulesRouter = router({
             });
           }
         }
+        const portChanged = nextSourcePort !== Number((rule as any).sourcePort);
+        const sniProxyProtocol = nextSni
+          ? await prepareSniRuleProxyProtocol({
+            input,
+            existing: groupChanged ? null : {
+              proxyProtocolSend: (rule as any).proxyProtocolSend,
+              proxyProtocolVersion: (rule as any).proxyProtocolVersion,
+              // Moving to another port adopts that listener's switch.
+              proxyProtocolReceive: portChanged ? undefined : (rule as any).proxyProtocolReceive,
+            },
+            sni: nextSni,
+            groupMode: group.groupMode,
+            entryHostIds,
+            sourcePort: nextSourcePort,
+            excludeRuleIds: ownRuleIds,
+          })
+          : null;
         const data: any = {
           ...input,
           ...(groupChanged || isForwardChain || isPortGroup || !nextMainBackupEnabled ||
@@ -2708,13 +2729,13 @@ export const crudRulesRouter = router({
           sni: nextSni,
           sniSplitterPort: nextSniSplitterPort,
           ...resolveSniRuleLimits(nextSni, input, rule as any),
-          ...(groupChanged ? normalizeProxyProtocolInput({}, nextProtocol, nextForwardType, isForwardChain, { clearUnsupported: true, tunnelRoute: !isForwardChain && group.groupType === "tunnel" }) : normalizeProxyProtocolInput(
+          ...(sniProxyProtocol || (groupChanged ? normalizeProxyProtocolInput({}, nextProtocol, nextForwardType, isForwardChain, { clearUnsupported: true, tunnelRoute: !isForwardChain && group.groupType === "tunnel" }) : normalizeProxyProtocolInput(
             { ...rule, ...input },
             nextProtocol,
             nextForwardType,
             isForwardChain,
             { clearUnsupported: true, tunnelRoute: !isForwardChain && group.groupType === "tunnel" },
-          )),
+          ))),
           ...(groupChanged ? normalizeTransportTuningInput({}, nextProtocol, nextForwardType, isForwardChain, { clearUnsupported: true, tunnelRoute: !isForwardChain && group.groupType === "tunnel", forwardxTunnel: false }) : normalizeTransportTuningInput(
             { ...rule, ...input },
             nextProtocol,
@@ -2773,6 +2794,9 @@ export const crudRulesRouter = router({
             await afterSniRuleWrite(() => db.runForwardGroupFailover(groupId));
           }
           await db.syncForwardGroupRules(activeGroupId);
+        }
+        if (sniProxyProtocol) {
+          await syncSniPortProxyReceive({ entryHostIds, sourcePort: nextSourcePort, receive: sniProxyProtocol.proxyProtocolReceive, excludeRuleIds: ownRuleIds });
         }
         await afterSniRuleWrite(() => db.runForwardGroupFailover(activeGroupId));
         await refreshUpdatedRulePortWarnings();
@@ -2852,6 +2876,9 @@ export const crudRulesRouter = router({
             });
           }
         }
+        const sniProxyProtocol = nextSni
+          ? await prepareSniRuleProxyProtocol({ input, sni: nextSni, groupMode: group.groupMode, entryHostIds, sourcePort, excludeRuleIds: ownRuleIds })
+          : null;
         const data: any = {
           name: input.name ?? (rule as any).name,
           personalGroupIds: input.personalGroupIds,
@@ -2878,13 +2905,13 @@ export const crudRulesRouter = router({
           blockHttp: false,
           blockSocks: false,
           blockTls: false,
-          ...normalizeProxyProtocolInput(
+          ...(sniProxyProtocol || normalizeProxyProtocolInput(
             {},
             nextProtocol,
             nextForwardType,
             isForwardChain,
             { clearUnsupported: true, tunnelRoute: !isForwardChain && group.groupType === "tunnel" },
-          ),
+          )),
           ...normalizeTransportTuningInput(
             {},
             nextProtocol,
@@ -2915,6 +2942,9 @@ export const crudRulesRouter = router({
         } else {
           await saveConvertedRule();
           await db.syncForwardGroupRules(groupId);
+        }
+        if (sniProxyProtocol) {
+          await syncSniPortProxyReceive({ entryHostIds, sourcePort, receive: sniProxyProtocol.proxyProtocolReceive, excludeRuleIds: ownRuleIds });
         }
         if ((rule as any).tunnelId) {
           const oldTunnel = await db.getTunnelById((rule as any).tunnelId);

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { publish, finishDocs, transfer, validateManifest } from './protocol.mjs';
 
-const repo = 'owo10086/sni-panel';
+const repo = 'touhounetwork/sni-panel';
 const directory = '.release/candidate';
 const manifest = JSON.parse(fs.readFileSync(`${directory}/manifest.json`));
 validateManifest(manifest, directory);

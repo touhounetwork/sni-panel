@@ -2,7 +2,7 @@
 
 ## 升级前建议
 
-先备份并查看 [GitHub Release](https://github.com/owo10086/sni-panel/releases) 或项目更新日志，确认面板、Agent 和移动客户端的兼容要求。升级可能变更数据库结构，不要将“替换旧镜像”视为完整回退方案。
+先备份并查看 [GitHub Release](https://github.com/touhounetwork/sni-panel/releases) 或项目更新日志，确认面板、Agent 和移动客户端的兼容要求。升级可能变更数据库结构，不要将“替换旧镜像”视为完整回退方案。
 
 同时保存 .env、Compose/服务配置、证书和数据库连接配置。备份含密码和私钥，应限制读取并加密保存；备份完成后验证能够恢复。
 
@@ -125,13 +125,13 @@ pg_restore -h 127.0.0.1 -U forwardx -d forwardx_restore --no-owner forwardx.dump
 ### Docker 部署
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | bash -s -- upgrade
 ```
 
 指定版本升级：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh | sudo env FORWARDX_TARGET_VERSION=vX.Y.Z bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh | sudo env FORWARDX_TARGET_VERSION=vX.Y.Z bash -s -- upgrade
 ```
 
 升级会保留数据和脚本识别的核心配置，包括原端口、项目名、容器名、登录密钥、下载加速地址和首次部署语言；数据库连接保存在持久化数据目录中。脚本会重新生成 Compose 和 `.env`，不会原样保留所有手动新增项。升级前备份并核对自定义网络、挂载和环境变量。如果目标镜像尚未构建完成，脚本会提示稍后重试并保留旧容器运行。手动 Compose 部署请继续按 [手动升级](./deploy-docker.md#手动升级) 操作，避免混用安装器。
@@ -148,13 +148,13 @@ docker exec forwardx-panel node -p "require('./package.json').version"
 ### 本地 systemd 部署
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | bash -s -- upgrade
 ```
 
 指定版本升级：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh | sudo env FORWARDX_TARGET_VERSION=vX.Y.Z bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh | sudo env FORWARDX_TARGET_VERSION=vX.Y.Z bash -s -- upgrade
 ```
 
 本地部署升级会保留 `data`、数据库配置和已有数据，并重新生成 `.env`；脚本只保留其识别的核心项，自定义环境与服务配置需提前备份并在升级后核对。如果面板程序包尚未上传到 GitHub Release，脚本会提示等待 GitHub Actions 构建完成。
@@ -165,11 +165,11 @@ curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/ins
 
 ```bash
 # Docker
-curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-docker.sh" \
+curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-docker.sh" \
   | bash -s -- upgrade --github-accelerator "https://mirror.example.com"
 
 # 本地 systemd
-curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/install-panel-local.sh" \
+curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/install-panel-local.sh" \
   | bash -s -- upgrade --github-accelerator "https://mirror.example.com"
 ```
 
@@ -250,8 +250,8 @@ sudo systemctl start forwardx-panel
 在安装过插件的 Agent 主机先预检，再确认执行：
 
 ~~~bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/migrate-agent-legacy.sh | bash
-curl -fsSL https://raw.githubusercontent.com/owo10086/sni-panel/main/scripts/migrate-agent-legacy.sh | bash -s -- --apply
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/migrate-agent-legacy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/touhounetwork/sni-panel/main/scripts/migrate-agent-legacy.sh | bash -s -- --apply
 ~~~
 
 该脚本不会升级或重启 Agent。迁移后仍需把 Agent 升级到 2.2.151 或更高版本，并在插件管理中重新同步 Agent；损坏或完全缺少版本的清单必须通过重新同步恢复。
@@ -270,7 +270,7 @@ Agent 保持旧面板 URL，旧面板转交请求；迁移不主动停止或重�
 
 ## 更新日志
 
-升级前建议查看 [GitHub Release](https://github.com/owo10086/sni-panel/releases) 或项目更新日志，确认是否包含面板、Agent 或移动客户端更新。
+升级前建议查看 [GitHub Release](https://github.com/touhounetwork/sni-panel/releases) 或项目更新日志，确认是否包含面板、Agent 或移动客户端更新。
 
 ## 卸载
 

@@ -90,7 +90,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { addHostNodeMeta, addNodeMetaAliases, hostDisplayName } from "@/lib/linkTestNodeMeta";
 import {
@@ -1258,12 +1257,6 @@ export function ForwardGroupsContent({
       toast.error(translateText("端口转发只能选择 1 台所属主机"));
       return;
     }
-    if ((form.groupMode === "chain" || isCollectionMode(form.groupMode)) && form.members.length >= MAX_FORWARD_GROUP_MEMBERS) {
-      toast.error(form.groupMode === "chain"
-        ? translateText("转发链最多支持 {0} 台主机", [MAX_FORWARD_GROUP_MEMBERS])
-        : translateText("入口组/出口组最多支持 {0} 台主机", [MAX_FORWARD_GROUP_MEMBERS]));
-      return;
-    }
     const effectiveType = effectiveGroupType;
     const key = memberKey(effectiveType, id);
     if (form.members.some((m) => m.key === key)) {
@@ -1419,16 +1412,12 @@ export function ForwardGroupsContent({
       if (!form.entryGroupId && form.members.length !== 1) return toast.error(translateText("端口转发需要选择 1 台所属主机"));
     } else if (isChainGroup) {
       const minChainMembers = form.entryGroupId ? 1 : 2;
-      if (form.members.length < minChainMembers || form.members.length > MAX_FORWARD_GROUP_MEMBERS) {
-        return toast.error(form.entryGroupId
-          ? translateText("转发链需要配置 1-{0} 台主机", [MAX_FORWARD_GROUP_MEMBERS])
-          : translateText("转发链需要配置 2-{0} 台主机", [MAX_FORWARD_GROUP_MEMBERS]));
+      if (form.members.length < minChainMembers) {
+        return toast.error(translateText("转发链至少需要配置 {0} 台主机", [minChainMembers]));
       }
     } else if (isEntryGroup || isExitGroup) {
-      if (form.members.length < 1 || form.members.length > MAX_FORWARD_GROUP_MEMBERS) {
-        return toast.error(isEntryGroup
-          ? translateText("入口组需要配置 1-{0} 台主机", [MAX_FORWARD_GROUP_MEMBERS])
-          : translateText("出口组需要配置 1-{0} 台主机", [MAX_FORWARD_GROUP_MEMBERS]));
+      if (form.members.length < 1) {
+        return toast.error(isEntryGroup ? translateText("入口组至少需要配置 1 台主机") : translateText("出口组至少需要配置 1 台主机"));
       }
     } else if (form.members.length === 0) {
       return toast.error(translateText("请至少添加一个成员"));
@@ -2484,7 +2473,7 @@ export function ForwardGroupsContent({
                           <Switch checked={runtimeProxyProtocolSupported && form.proxyProtocolSend} disabled={!runtimeProxyProtocolSupported} onCheckedChange={(checked) => setForm({ ...form, proxyProtocolSend: checked })} />
                         </label>
                       </div>
-                      {!runtimeProxyProtocolSupported && <p className="text-xs text-muted-foreground">{translateText("PROXY Protocol 仅支持 TCP 且转发工具为 GOST 或 Realm。")}</p>}
+                      {!runtimeProxyProtocolSupported && <p className="text-xs text-muted-foreground">{translateText("PROXY Protocol 仅支持 TCP 且转发工具为 GOST 或 Realm。UDP 需使用 ForwardX 隧道：内核转发无法改写数据报，realm 与 GOST 不能逐个数据报写入头。")}</p>}
                     </div>
 
                   </div>
@@ -2500,7 +2489,6 @@ export function ForwardGroupsContent({
                     hosts={hosts || []}
                     initialHopIds={form.members.map((member) => Number(member.hostId || 0)).filter(Boolean)}
                     initialHopConnectHosts={form.members.map((member) => member.connectHost || null)}
-                    maxHops={MAX_FORWARD_GROUP_MEMBERS}
                     externalEntry={!!form.entryGroupId}
                     excludedHostIds={entryGroupHostIds(form.entryGroupId)}
                     onChange={updateChainMemberIds}

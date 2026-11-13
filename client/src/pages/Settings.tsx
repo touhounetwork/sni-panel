@@ -30,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { AgentInstallHookGlobalSetting } from "@/components/AgentInstallHookGlobalSetting";
 import { HintSwitch } from "@/components/ui/hint-switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList } from "@/components/ui/sliding-tabs";
@@ -278,7 +279,7 @@ function toLocalAiProviderConfig(provider: AiProvider, source?: AiProviderServer
 }
 type DdnsProvider = "disabled" | "cloudflare" | "webhook" | "huaweicloud" | "aliyun" | "tencentcloud";
 const ddnsProviders: DdnsProvider[] = ["disabled", "cloudflare", "webhook", "huaweicloud", "aliyun", "tencentcloud"];
-const docsBaseUrl = "https://owo10086.github.io/sni-panel";
+const docsBaseUrl = "https://touhounetwork.github.io/sni-panel";
 const ddnsProviderGuideAnchors: Record<DdnsProvider, string> = {
   disabled: "quick-setup",
   cloudflare: "cloudflare",
@@ -5788,6 +5789,7 @@ function SystemInfoSection() {
               </div>
               <Switch className="shrink-0" checked={agentPreferPanelInstall} onCheckedChange={setAgentPreferPanelInstall} />
             </div>
+            <AgentInstallHookGlobalSetting />
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-muted/20 p-3 lg:col-span-2">
               <div className="min-w-0">
                 <p className="text-sm font-medium">{translateText("面板更新使用加速站")}</p>

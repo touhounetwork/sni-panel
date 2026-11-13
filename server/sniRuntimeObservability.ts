@@ -19,6 +19,9 @@ export type SniRuntimeRuleReport = {
   maxConnections?: unknown;
   maxIPs?: unknown;
   accessScope?: unknown;
+  proxyProtocolReceive?: unknown;
+  proxyProtocolSend?: unknown;
+  proxyProtocolVersion?: unknown;
   sourceAllowIps?: unknown;
   protocol?: unknown;
   forwardType?: unknown;
@@ -416,7 +419,10 @@ export function getSniRuntimeGroupStatus(hostIdValue: unknown, splitterPortValue
 type FailoverSniRule = {
   id: unknown; hostId: unknown; userId: unknown; sourcePort: unknown; sni?: unknown;
   targetIp: unknown; targetPort: unknown; rateLimitMbps?: unknown; maxConnections?: unknown;
+  proxyProtocolReceive?: unknown; proxyProtocolSend?: unknown; proxyProtocolVersion?: unknown;
 };
+
+const reportBool = (value: unknown) => value === true || value === 1 || value === "1" || String(value ?? "").toLowerCase() === "true";
 
 export function failoverSniRuntimeRuleReport(rule: Partial<FailoverSniRule>): SniRuntimeRuleReport {
   const rate = Number(rule.rateLimitMbps);
@@ -427,6 +433,11 @@ export function failoverSniRuntimeRuleReport(rule: Partial<FailoverSniRule>): Sn
     limitIn: bytesPerSecond, limitOut: bytesPerSecond,
     maxConnections: Math.min(1_000_000, Math.max(0, Math.floor(Number(rule.maxConnections) || 0))),
     maxIPs: 0, accessScope: `u${Number(rule.userId) || 0}_h${Number(rule.hostId)}`,
+    // Same values the heartbeat sends (sniRouteProxyProtocolFields); only
+    // failover and port children reach this report.
+    proxyProtocolReceive: reportBool(rule.proxyProtocolReceive),
+    proxyProtocolSend: reportBool(rule.proxyProtocolSend),
+    proxyProtocolVersion: Number(rule.proxyProtocolVersion) === 2 ? 2 : 1,
     protocol: "tcp", forwardType: "forwardx", sourceAllowIps: [],
   };
 }
@@ -456,5 +467,13 @@ export function sniRouteContentMatches(candidate: SniRuntimeRuleReport, expected
     && Number(candidate.limitOut || 0) === Number(expected.limitOut || 0)
     && Number(candidate.maxConnections || 0) === Number(expected.maxConnections || 0)
     && Number(candidate.maxIPs || 0) === Number(expected.maxIPs || 0)
-    && String(candidate.accessScope || "").trim() === String(expected.accessScope || "").trim();
+    && String(candidate.accessScope || "").trim() === String(expected.accessScope || "").trim()
+    && sniRouteProxyProtocolSignature(candidate) === sniRouteProxyProtocolSignature(expected);
+}
+
+// The version only matters while sending, matching the splitter's own
+// normalization; an old splitter reports no fields and never matches.
+function sniRouteProxyProtocolSignature(route: SniRuntimeRuleReport) {
+  const send = route.proxyProtocolSend === true;
+  return [route.proxyProtocolReceive === true, send, send ? (Number(route.proxyProtocolVersion) === 2 ? 2 : 1) : 0].join(":");
 }

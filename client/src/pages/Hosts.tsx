@@ -2,6 +2,8 @@ import { getFormatLocale } from "@/i18n";
 import { t as translateText } from "@/i18n";
 import { HintSwitch } from "@/components/ui/hint-switch";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { HostInstallHookSettings } from "@/components/hosts/HostInstallHookSettings";
+import { HostCommandRunner } from "@/components/hosts/HostCommandRunner";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AgentTokenManager, { type AgentTokenViewMode } from "@/components/AgentTokenManager";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
@@ -117,6 +119,7 @@ import {
   XCircle,
   ActivitySquare,
   FolderKanban,
+  TerminalSquare,
 } from "lucide-react";
 import { GlobeWorkspace, globeTooltip, useGlobeScene } from "@/components/GlobeWorkspace";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -1034,17 +1037,18 @@ function HostTrafficSummaryCard({
 }
 
 type HostViewMode = "card" | "compact-card" | "table" | "map" | "flat-map";
-type HostManageTab = "hosts" | "groups" | "services" | "tokens";
+type HostManageTab = "hosts" | "groups" | "services" | "tokens" | "commands";
 type HostManageFilterStats = { filtered: number; total: number };
 type HostDialogTab = "basic" | "other";
 
-const HOST_MANAGE_TABS_ADMIN = ["hosts", "groups", "tokens", "services"] as const;
+const HOST_MANAGE_TABS_ADMIN = ["hosts", "groups", "tokens", "services", "commands"] as const;
 const HOST_MANAGE_TABS_USER = ["hosts"] as const;
 const HOST_MANAGE_TAB_ITEMS_ADMIN = [
   { value: "hosts", label: translateText("主机管理"), icon: Server },
   { value: "groups", label: translateText("分组管理"), icon: FolderKanban },
   { value: "tokens", label: translateText("Token 管理"), icon: Key },
   { value: "services", label: translateText("服务管理"), icon: Rows3 },
+  { value: "commands", label: translateText("批量命令"), icon: TerminalSquare },
 ] as const satisfies readonly SlidingTabItem<HostManageTab>[];
 const HOST_MANAGE_TAB_ITEMS_USER = [
   { value: "hosts", label: translateText("主机管理"), icon: Server },
@@ -1055,6 +1059,7 @@ const HOST_MANAGE_FILTER_CONFIG: Record<HostManageTab, { placeholder: string; un
   groups: { placeholder: translateText("搜索分组 / 主机名称 / 状态"), unit: translateText("组") },
   tokens: { placeholder: translateText("搜索 Token / 备注 / 状态 / 关联主机"), unit: translateText("个") },
   services: { placeholder: translateText("搜索服务 / 目标地址 / 类型 / 主机范围"), unit: translateText("项") },
+  commands: { placeholder: translateText("搜索节点 / IP / Agent 版本"), unit: translateText("台") },
 };
 
 const HOST_DIALOG_TABS = [
@@ -1247,6 +1252,7 @@ function HostsContent() {
     groups: "",
     tokens: "",
     services: "",
+    commands: "",
   });
   const [bulkUpgradeDialogOpen, setBulkUpgradeDialogOpen] = useState(false);
   const hostSearchQuery = manageSearchQueries.hosts;
@@ -1431,6 +1437,7 @@ function HostsContent() {
     groups: { filtered: 0, total: 0 },
     tokens: { filtered: 0, total: 0 },
     services: { filtered: 0, total: 0 },
+    commands: { filtered: 0, total: 0 },
   });
   const updateManageFilterStats = useCallback((tab: HostManageTab, stats: HostManageFilterStats) => {
     setManageFilterStats((current) => {
@@ -1449,6 +1456,10 @@ function HostsContent() {
   );
   const updateServiceFilterStats = useCallback(
     (stats: HostManageFilterStats) => updateManageFilterStats("services", stats),
+    [updateManageFilterStats],
+  );
+  const updateCommandFilterStats = useCallback(
+    (stats: HostManageFilterStats) => updateManageFilterStats("commands", stats),
     [updateManageFilterStats],
   );
   const { data: hostGroups = [], isLoading: isHostGroupsLoading } = trpc.hosts.hostGroups.useQuery(undefined, {
@@ -2420,7 +2431,7 @@ function HostsContent() {
               </Button>
             </div>
           )}
-          {user?.role === "admin" && activeManageTab !== "hosts" && (
+          {user?.role === "admin" && activeManageTab !== "hosts" && activeManageTab !== "commands" && (
             <Button onClick={openCreate} className="col-span-2 w-full gap-2 sm:col-span-1 sm:w-auto">
               <Plus className="h-4 w-4" />
               {activeManageTab === "services" ? translateText("添加服务") : activeManageTab === "groups" ? translateText("添加分组") : translateText("添加主机")}
@@ -2748,6 +2759,12 @@ function HostsContent() {
               searchQuery={manageSearchQueries.services}
               onFilterStatsChange={updateServiceFilterStats}
             />
+          </TabsContent>
+        )}
+
+        {user?.role === "admin" && (
+          <TabsContent value="commands" className="space-y-4">
+            <HostCommandRunner searchQuery={manageSearchQueries.commands} onFilterStatsChange={updateCommandFilterStats} />
           </TabsContent>
         )}
       </Tabs>
@@ -3344,6 +3361,7 @@ function HostsContent() {
                           <p className="text-xs text-amber-600 dark:text-amber-400">{translateText("选择双栈或全部检测 IP 后，将完整替换该域名下所选类型的记录；改回仅主 IP 也会清理多余记录。请使用专用域名，Webhook 需支持 action: replace 和 values 数组。")}</p>
                         )}
                       </div>
+                      {user?.role === "admin" && editingId ? <HostInstallHookSettings hostId={editingId} /> : null}
                     </>
                   ) : (
                     <div className="rounded-md bg-muted/35 px-3 py-2 text-sm text-muted-foreground">{translateText("仅管理员可配置主机其他配置。")}</div>

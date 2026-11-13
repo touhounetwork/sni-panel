@@ -51,7 +51,7 @@ export default defineConfig({
   themeConfig: {
     siteTitle: `ForwardX v${version}`,
     editLink: {
-      pattern: "https://github.com/owo10086/sni-panel/edit/main/docs/:path",
+      pattern: "https://github.com/touhounetwork/sni-panel/edit/main/docs/:path",
       text: "在 GitHub 上改进此页",
     },
     nav: [
@@ -59,7 +59,7 @@ export default defineConfig({
       { text: "部署面板", link: "/guide/deploy-panel" },
       { text: "文档目录", link: "/guide/" },
       { text: "常见问题", link: "/guide/troubleshooting" },
-      { text: "GitHub", link: "https://github.com/owo10086/sni-panel" },
+      { text: "GitHub", link: "https://github.com/touhounetwork/sni-panel" },
     ],
     sidebar: [
       {
@@ -180,6 +180,6 @@ export default defineConfig({
         },
       },
     },
-    socialLinks: [{ icon: "github", link: "https://github.com/owo10086/sni-panel" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/touhounetwork/sni-panel" }],
   },
 });
