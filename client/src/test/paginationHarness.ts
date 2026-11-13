@@ -7,6 +7,16 @@ import * as sharedPagination from "@shared/pagination";
 
 const require = createRequire(import.meta.url);
 
+// Page-level helpers whose React hooks cannot run outside a real renderer.
+// Collapsed toggles default to expanded and no managed theme is active.
+export function pageComponentStubs(useState: (initial: any) => any) {
+  return {
+    "@/components/SummaryToggle": { SummaryToggle: "SummaryToggle", useSummaryCollapsed: () => useState(false) },
+    "@/components/MobileFilterToggle": { MobileFilterToggle: "MobileFilterToggle", mobileFilterPanelClass: () => "" },
+    "@/lib/themeRuntime": { useThemeDefinition: () => null, setThemeRuntime() {} },
+  } as Record<string, any>;
+}
+
 // Run real page components and hooks with deterministic effects, without a DOM
 // or dashboard providers. JSX handlers and tRPC query inputs remain executable.
 export function createPaginationHarness(storage = new Map<string, string>(), mocks: Record<string, any> = {}, globals: Record<string, any> = {}) {
@@ -56,15 +66,20 @@ export function createPaginationHarness(storage = new Map<string, string>(), moc
       exports: module.exports, module, window: { localStorage },
       require(id: string) {
         if (id in mocks) return mocks[id];
+        const stubs = pageComponentStubs(hooks.useState);
+        if (id in stubs) return stubs[id];
         if (id === "react") return hooks;
         if (id === "react/jsx-runtime") return require(id);
         if (id === "@shared/pagination") return sharedPagination;
         if (id === "@/lib/pageSize") return load("client/src/lib/pageSize.ts");
         if (id === "@/components/PersistentPagination") return load("client/src/components/PersistentPagination.tsx");
         if (id === "@/lib/utils") return { cn: (...values: any[]) => values.filter(Boolean).join(" ") };
+        // Pure display helpers are real modules; only hooks and providers are stubbed.
+        if (id === "@/lib/planDisplay" || id === "@/lib/planPorts") return require(id);
         if (id === "@/i18n") return {
           t: (key: string, values: any[] = []) => key.replace(/\{(\d+)\}/g, (_, i) => String(values[Number(i)])),
           getFormatLocale: () => "zh-CN",
+          getLanguage: () => "zh-CN",
         };
         return new Proxy({ __esModule: true }, { get: (target, key) => key === "__esModule" ? true : String(key) });
       },

@@ -44,6 +44,7 @@ test("target self-tests keep their result and never claim a verified external pa
       return started.id;
     };
     try {
+      await insert("users", { id: 1, username: "owner", password: "x", role: "admin" });
       await insert("hosts", { id: 1, name: "entry", ip: "198.51.100.1", ipv4: "198.51.100.1", userId: 1, isOnline: 1, agentToken: "token-1", lastHeartbeat: now });
       await insert("forward_rules", { id: 100, hostId: 1, userId: 1, name: "rule", sourcePort: 18000, targetIp: "203.0.113.10", targetPort: 443, forwardType: "nftables", protocol: "tcp", isEnabled: 1, pendingDelete: 0 });
 

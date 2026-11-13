@@ -1,4 +1,5 @@
 import { systemRouter } from "./_core/systemRouter";
+import { themesRouter } from "./routers/themes";
 import { paymentRouter } from "./payment";
 import { router } from "./_core/trpc";
 import { agentTokensRouter } from "./routers/agentTokens";
@@ -14,6 +15,7 @@ import { operationsRouter } from "./routers/operations";
 import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { hostsRouter } from "./routers/hosts";
 import { lookingGlassRouter } from "./routers/lookingGlass";
+import { linkSpeedRouter } from "./routers/linkSpeed";
 import { plansRouter } from "./routers/plans";
 import { pluginsRouter } from "./routers/plugins";
 import { rulesRouter } from "./routers/rules";
@@ -26,6 +28,7 @@ import { usersRouter } from "./routers/users";
 
 export const appRouter = router({
   system: systemRouter,
+  themes: themesRouter,
   setup: setupRouter,
   payment: paymentRouter,
   billing: billingRouter,
@@ -38,6 +41,7 @@ export const appRouter = router({
   users: usersRouter,
   hosts: hostsRouter,
   lookingGlass: lookingGlassRouter,
+  linkSpeed: linkSpeedRouter,
   rules: rulesRouter,
   forwardGroups: forwardGroupsRouter,
   tunnels: tunnelsRouter,

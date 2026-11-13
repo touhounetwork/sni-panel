@@ -564,8 +564,8 @@ test("unauthorized deletions do not trigger historical repair", () => {
     await insert("agent_tokens", { id: 50, token: "admin-only", hostId: 1, userId: 1 });
     const customer = { ...context, user: { id: 2, username: "customer", role: "user", accountEnabled: true } };
     const before = await deleteSnapshot();
-    await assert.rejects(() => hostsRouter.createCaller(customer).delete({ id: 1 }), /无权/);
-    await assert.rejects(() => agentTokensRouter.createCaller(customer).delete({ id: 50 }), /无权/);
+    await assert.rejects(() => hostsRouter.createCaller(customer).delete({ id: 1 }), /无权|required permission/);
+    await assert.rejects(() => agentTokensRouter.createCaller(customer).delete({ id: 50 }), /无权|required permission/);
     assert.deepEqual(await deleteSnapshot(), before);
   `);
 });
@@ -576,7 +576,7 @@ test("owning a token does not allow changing another user's host", () => {
     await runtime.executeRaw("UPDATE hosts SET agentToken='customer-token' WHERE id=1");
     const customer = { ...context, user: { id: 2, username: "customer", role: "user", accountEnabled: true } };
     const before = await deleteSnapshot();
-    await assert.rejects(() => agentTokensRouter.createCaller(customer).delete({ id: 50 }), /无权/);
+    await assert.rejects(() => agentTokensRouter.createCaller(customer).delete({ id: 50 }), /无权|required permission/);
     assert.deepEqual(await deleteSnapshot(), before);
   `);
 });
@@ -807,10 +807,11 @@ for (const change of ["value", "owner", "hostId", "host-set", "host-owner"]) {
         'CREATE TRIGGER change_token_during_repair AFTER UPDATE OF hostId ON forward_rules ' +
         'WHEN OLD.id=1000 BEGIN ' + updates[change] + ' END'
       );
-      await assert.rejects(() => caller.delete({ id: 50 }), /主机引用已变化|无权/);
+      await assert.rejects(() => caller.delete({ id: 50 }), /主机引用已变化|无权|required permission/);
       assert.equal((await runtime.queryRaw('SELECT id FROM hosts WHERE id=1')).length, 1);
       assert.equal((await runtime.queryRaw('SELECT id FROM agent_tokens WHERE id=50')).length, 1);
-      assert.equal((await runtime.queryRaw('SELECT hostId FROM forward_rules WHERE id=1000'))[0].hostId, 2);
+      // Token deletion is admin-only: an ordinary user is refused before any historical repair.
+      assert.equal((await runtime.queryRaw('SELECT hostId FROM forward_rules WHERE id=1000'))[0].hostId, change === "host-owner" ? 1 : 2);
     `);
   });
 }
@@ -948,7 +949,7 @@ for (const retainedBy of ["plan", "other-token"]) {
   });
 }
 
-test("host deletion rechecks current ownership in the final save after historical repair", () => {
+test("host deletion by an ordinary user is refused before historical repair", () => {
   runGroupMemberReleaseCase(`
     await seedFailover();
     await runtime.executeRaw('DELETE FROM forward_group_members WHERE hostId=1');
@@ -964,14 +965,15 @@ test("host deletion rechecks current ownership in the final save after historica
       'CREATE TRIGGER transfer_host_during_repair AFTER UPDATE OF hostId ON forward_rules ' +
       'WHEN OLD.id=1000 BEGIN UPDATE hosts SET userId=2 WHERE id=1; END'
     );
+    // Host deletion is admin-only: an ordinary user is refused before any historical repair runs.
     const userContext = { ...context, user: { ...context.user, role: "user" } };
-    await assert.rejects(() => hostsRouter.createCaller(userContext).delete({ id: 1 }), /无权/);
+    await assert.rejects(() => hostsRouter.createCaller(userContext).delete({ id: 1 }), /无权|required permission/);
     assert.deepEqual(await runtime.queryRaw('SELECT userId,agentToken FROM hosts WHERE id=1'),
-      [{ userId: 2, agentToken: "new-owner-token" }]);
+      [{ userId: 1, agentToken: "new-owner-token" }]);
     assert.equal((await runtime.queryRaw('SELECT id FROM agent_tokens WHERE id=50')).length, 1);
     assert.equal((await runtime.queryRaw('SELECT userId FROM user_host_permissions WHERE hostId=1')).length, 1);
     assert.deepEqual(await runtime.queryRaw('SELECT isRunning FROM forward_rules WHERE id=9001'), [{ isRunning: 1 }]);
-    assert.deepEqual(await runtime.queryRaw('SELECT hostId FROM forward_rules WHERE id=1000'), [{ hostId: 2 }]);
+    assert.deepEqual(await runtime.queryRaw('SELECT hostId FROM forward_rules WHERE id=1000'), [{ hostId: 1 }]);
     assert.equal((await runtime.queryRaw("SELECT id FROM config_audit_events WHERE resourceType='host' AND resourceId=1 AND action='delete'")).length, 0);
   `);
 });

@@ -2,6 +2,7 @@ import { getLanguage, t as translateText } from "@/i18n";
 import { useState, useCallback, useEffect, useRef } from "react";
 import LanguageSelector from "@/components/LanguageSelector";
 import GoogleLoginButton from "@/components/GoogleLoginButton";
+import PasswordRecoveryDialog from "@/components/PasswordRecoveryDialog";
 import ImageCaptchaField from "@/components/ImageCaptchaField";
 import { normalizeAuthCaptchaProvider } from "@shared/authCaptcha";
 import { captureAffiliateReferral, getAffiliateReferral, clearAffiliateReferral } from "@/lib/affiliateReferral";
@@ -20,6 +21,8 @@ import { useLocation, useSearch } from "wouter";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { LoginLayout } from "@/components/LoginLayout";
+import { useThemeDefinition } from "@/lib/themeRuntime";
+import { themeText, type ThemeText } from "@shared/themeViews";
 import { loginContentMotion } from "@/lib/loginTransition";
 import { ACCOUNT_DISABLED_ERR_MSG } from "@shared/const";
 
@@ -161,6 +164,8 @@ function rememberLoginWelcome(user: any) {
 }
 
 export default function Login() {
+  const themeLogin = useThemeDefinition()?.manifest.views?.login;
+  const themeCopy = (value: ThemeText | undefined, fallback: string) => themeText(value, getLanguage(), fallback);
   const [location] = useLocation();
   const search = useSearch();
   const [referralCode, setReferralCode] = useState("");
@@ -174,6 +179,7 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [emailCode, setEmailCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
   const [captchaAnswer, setCaptchaAnswer] = useState("");
   const [captchaChallenge, setCaptchaChallenge] = useState<CaptchaChallengeState | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
@@ -841,7 +847,7 @@ export default function Login() {
   const isTwoFactorPending = verifyTwoFactorLoginMutation.isPending;
   const isTelegramPending = telegramLoginMutation.isPending || telegramWebAppLoginMutation.isPending;
   const isMobileTelegramWaiting = startMobileTelegramLoginMutation.isPending || !!mobileTelegramLogin;
-  const showTelegramLoginSlot = mode === "login" && hasMobilePanelUrl && !getTelegramWebAppInitData();
+  const showTelegramLoginSlot = mode === "login" && hasMobilePanelUrl && publicInfo?.telegramLoginEnabled === true && !getTelegramWebAppInitData();
   const captchaCooldownSeconds = Math.max(0, Math.ceil((captchaCooldownUntil - Date.now()) / 1000));
   const activeCaptchaImage = captchaChallenge?.purpose === captchaPurpose ? captchaChallenge.imageDataUrl : undefined;
   const captchaRefreshTitle = captchaCooldownSeconds > 0
@@ -850,6 +856,7 @@ export default function Login() {
 
   return (
     <>
+      <PasswordRecoveryDialog open={passwordRecoveryOpen} onOpenChange={setPasswordRecoveryOpen} defaultIdentifier={username} onPasswordReset={() => { setPassword(""); setConfirmPassword(""); mobileAuth.setCredentials(username, ""); mobileAuth.clear(); }} />
       <LoginLayout
         siteTitle={siteTitle}
         logo={publicInfo?.siteLogoDataUrl}
@@ -906,11 +913,11 @@ export default function Login() {
                 >{translateText("未添加服务器地址，请点击右上角设置按钮添加")}</button>
               )}
               <div className="space-y-2">
-                <Label htmlFor="username">{translateText("用户名或邮箱")}</Label>
+                <Label htmlFor="username">{themeCopy(themeLogin?.usernameLabel, translateText("用户名或邮箱"))}</Label>
                 <Input
                   id="username"
                   type="text"
-                  placeholder={translateText("请输入用户名或邮箱")}
+                  placeholder={themeCopy(themeLogin?.usernamePlaceholder, translateText("请输入用户名或邮箱"))}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
@@ -922,12 +929,12 @@ export default function Login() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">{translateText("密码")}</Label>
+                <Label htmlFor="password">{themeCopy(themeLogin?.passwordLabel, translateText("密码"))}</Label>
                 <div className="relative">
                   <Input
                     id="password"
                     type={showPassword ? "text" : "password"}
-                    placeholder={translateText("请输入密码")}
+                    placeholder={themeCopy(themeLogin?.passwordPlaceholder, translateText("请输入密码"))}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="current-password"
@@ -972,11 +979,14 @@ export default function Login() {
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />{translateText("登录中...")}</>
                 ) : (
                   <>
-                    <LogIn className="mr-2 h-4 w-4" />{translateText("登录")}</>
+                    <LogIn className="mr-2 h-4 w-4" />{themeCopy(themeLogin?.loginButton, translateText("登录"))}</>
                 )}
               </Button>
 
               <GoogleLoginButton disabled={isPending} />
+              <div className="text-center">
+                <button type="button" className="auth-login-switch-link" disabled={isPending || !hasMobilePanelUrl} onClick={() => setPasswordRecoveryOpen(true)}>{translateText("忘记密码？")}</button>
+              </div>
               {mode === "login" && discordLoginStatus?.enabled && discordLoginStatus.botId && (
                 <div className="space-y-2 rounded-lg border p-3 text-center"><p className="text-sm">{translateText("Discord 快捷登录")}</p><p className="text-xs text-muted-foreground">{translateText("在已绑定的机器人私聊中发送 /login，打开一次性登录链接。")}</p><Button variant="outline" asChild><a href={`https://discord.com/users/${discordLoginStatus.botId}`} target="_blank" rel="noopener noreferrer">{translateText("打开 Discord")}</a></Button></div>
               )}
@@ -1030,7 +1040,7 @@ export default function Login() {
                     if (!registrationEnabled) { toast.info(REGISTRATION_CLOSED_MESSAGE); return; }
                     setMode("register");
                     setCaptchaAnswer("");
-                  }}>{translateText("没有账号？点击注册")}</button>
+                  }}>{themeCopy(themeLogin?.registerLink, translateText("没有账号？点击注册"))}</button>
               </div>
             </form>
           ) : (
@@ -1044,11 +1054,11 @@ export default function Login() {
                 >{translateText("未添加服务器地址，请点击右上角设置按钮添加")}</button>
               )}
               <div className="space-y-2">
-                <Label htmlFor="reg-username">{translateText("用户名")}</Label>
+                <Label htmlFor="reg-username">{themeCopy(themeLogin?.usernameLabel, translateText("用户名"))}</Label>
                 <Input
                   id="reg-username"
                   type="text"
-                  placeholder={translateText("请输入邮箱作为用户名")}
+                  placeholder={themeCopy(mode === "register" ? themeLogin?.registerUsernamePlaceholder : themeLogin?.usernamePlaceholder, translateText("请输入邮箱作为用户名"))}
                   value={username}
                   onChange={(e) => {
                     setUsername(e.target.value);
@@ -1060,11 +1070,11 @@ export default function Login() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="reg-name">{translateText("昵称（选填）")}</Label>
+                <Label htmlFor="reg-name">{themeCopy(themeLogin?.nicknameLabel, translateText("昵称（选填）"))}</Label>
                 <Input
                   id="reg-name"
                   type="text"
-                  placeholder={translateText("显示名称")}
+                  placeholder={themeCopy(themeLogin?.nicknamePlaceholder, translateText("显示名称"))}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   maxLength={DISPLAY_NAME_MAX_LENGTH}
@@ -1074,12 +1084,12 @@ export default function Login() {
               {referralStatus.data?.enabled && <div className="space-y-2"><Label htmlFor="reg-referral">{translateText("邀请码（选填）")}</Label><Input id="reg-referral" value={referralCode} maxLength={32} autoComplete="off" disabled={isPending} onChange={e => { setReferralCode(e.target.value); clearAffiliateReferral(); captureAffiliateReferral(`ref=${encodeURIComponent(e.target.value.trim())}`); }} /></div>}
               {emailConfig?.verifyRegistration && (
                 <div className="space-y-2">
-                  <Label htmlFor="reg-email">{translateText("邮箱")}</Label>
+                  <Label htmlFor="reg-email">{themeCopy(themeLogin?.emailLabel, translateText("邮箱"))}</Label>
                   <div className="flex gap-2">
                     <Input
                       id="reg-email"
                       type="email"
-                      placeholder={translateText("用于接收验证码")}
+                      placeholder={themeCopy(themeLogin?.emailPlaceholder, translateText("用于接收验证码"))}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={isPending}
@@ -1104,12 +1114,12 @@ export default function Login() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label htmlFor="reg-password">{translateText("密码")}</Label>
+                <Label htmlFor="reg-password">{themeCopy(themeLogin?.passwordLabel, translateText("密码"))}</Label>
                 <div className="relative">
                   <Input
                     id="reg-password"
                     type={showPassword ? "text" : "password"}
-                    placeholder={translateText("至少6个字符")}
+                    placeholder={themeCopy(themeLogin?.registerPasswordPlaceholder, translateText("至少6个字符"))}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="new-password"
@@ -1129,11 +1139,11 @@ export default function Login() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="reg-confirm">{translateText("确认密码")}</Label>
+                <Label htmlFor="reg-confirm">{themeCopy(themeLogin?.confirmPasswordLabel, translateText("确认密码"))}</Label>
                 <Input
                   id="reg-confirm"
                   type="password"
-                  placeholder={translateText("再次输入密码")}
+                  placeholder={themeCopy(themeLogin?.confirmPasswordPlaceholder, translateText("再次输入密码"))}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
@@ -1166,17 +1176,17 @@ export default function Login() {
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />{translateText("注册中...")}</>
                 ) : (
                   <>
-                    <UserPlus className="mr-2 h-4 w-4" />{translateText("注册")}</>
+                    <UserPlus className="mr-2 h-4 w-4" />{themeCopy(themeLogin?.registerButton, translateText("注册"))}</>
                 )}
               </Button>
 
               <div className="text-center">
                 <button type="button" className="auth-login-switch-link" disabled={isPending}
                   onClick={() => { setMode("login"); setCaptchaAnswer(""); }}>
-                  {translateText("已有账号？返回登录")}
+                  {themeCopy(themeLogin?.loginLink, translateText("已有账号？返回登录"))}
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground text-center">{translateText("注册后需要管理员授权才能使用转发功能")}</p>
+              <p className="text-xs text-muted-foreground text-center">{themeCopy(themeLogin?.registrationNote, translateText("注册后需要管理员授权才能使用转发功能"))}</p>
             </form>
           )}
           </motion.div>

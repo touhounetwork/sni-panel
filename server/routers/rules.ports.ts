@@ -1,6 +1,7 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
+import { MissingPortForwardToolError } from "../portForwardToolPreflight";
 import * as db from "../db";
 import type { Tunnel } from "../../drizzle/schema";
 import {
@@ -153,7 +154,7 @@ export const portsRulesRouter = router({
       hostId: z.number().int().positive().optional(),
       forwardGroupId: z.number().int().positive().optional(),
       tunnelId: z.number().nullable().optional(),
-      sourcePort: z.number().min(1).max(65535),
+      sourcePort: z.number().int().min(1).max(65535),
       excludeRuleId: z.number().optional(),
       protocol: z.enum(["tcp", "udp", "both"]).optional().default("both"),
       sni: z.string().max(1024).nullable().optional(),
@@ -162,7 +163,7 @@ export const portsRulesRouter = router({
       (input) => !!input.hostId !== !!input.forwardGroupId,
       { message: "请选择一个主机、隧道或转发组" },
     ))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<{ used: boolean; reason?: string; configurationError?: string }> => {
       const actor = ctx.user;
       const ownerContext = { ...ctx, user: await resolveRuleOperationOwner(actor, input.userId) };
       if (input.excludeRuleId) {
@@ -205,11 +206,13 @@ export const portsRulesRouter = router({
           });
           return { used: false };
         } catch (error) {
+          if (error instanceof MissingPortForwardToolError) {
+            return { used: false, configurationError: error.message };
+          }
           const reason = error instanceof Error ? error.message : "";
-          const isRangeError = /必须在.*(?:范围|区间)|must be.*range/i.test(reason);
           return {
             used: true,
-            ...(isRangeError ? { reason } : {}),
+            ...(reason ? { reason } : {}),
           };
         }
       }
@@ -298,7 +301,7 @@ export const portsRulesRouter = router({
       hostId: z.number().int().positive().optional(),
       forwardGroupId: z.number().int().positive().optional(),
       tunnelId: z.number().nullable().optional(),
-      sourcePort: z.number().min(1).max(65535),
+      sourcePort: z.number().int().min(1).max(65535),
       sni: z.string().max(1024),
       excludeRuleId: z.number().optional(),
     }).refine(

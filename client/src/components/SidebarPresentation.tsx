@@ -29,7 +29,7 @@ export function SidebarPresentation({ groups, path }: { groups: SidebarPresentat
   return <>{groups.map((group, index) => <SidebarGroup key={index} className={cn(
     index === 0 ? "pb-2 mobile-sidebar-group" : "mt-1 shrink-0 border-t border-sidebar-border/50 pt-2 mobile-sidebar-group mobile-sidebar-admin-group",
   )}>
-    <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider">{group.label}</SidebarGroupLabel>
+    <SidebarGroupLabel className="text-xs text-muted-foreground/80 uppercase tracking-wider">{group.label}</SidebarGroupLabel>
     <SidebarMenu className={cn("py-1 mobile-sidebar-menu", collapsed ? "items-center px-0" : "px-2")}>
       {group.items.map(item => {
         const page = resolveClientRoute(item.path)?.page;

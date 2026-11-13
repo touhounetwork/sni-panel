@@ -9,6 +9,8 @@ import ts from "typescript";
 import { pageResult, pageWindowForTotal } from "../shared/pagination";
 import { gateForwardRulesForUserSurface } from "./forwardRuleVisibility";
 
+// Host page sizes use the shared 20–1000 pagination (see HostsPagination.test.tsx);
+// upstream's 12/24/36/48 host selector is intentionally not adopted.
 test("host management badges use one count-only query across database dialects", async () => {
   const text = fs.readFileSync("server/repositories/hostRepository.ts", "utf8");
   const source = ts.createSourceFile("hostRepository.ts", text, ts.ScriptTarget.Latest, true);

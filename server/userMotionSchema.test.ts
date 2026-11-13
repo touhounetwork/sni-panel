@@ -23,6 +23,6 @@ test("MySQL and PostgreSQL default new and upgraded accounts to animations enabl
     const quote = kind === "mysql" ? "`" : '"';
     const column = `${quote}animationsEnabled${quote} BOOLEAN NOT NULL DEFAULT ${kind === "mysql" ? "1" : "TRUE"}`;
     assert.ok(queries.some(sql => sql.startsWith(`CREATE TABLE IF NOT EXISTS ${quote}users${quote}`) && sql.includes(column)), kind);
-    assert.ok(queries.some(sql => sql.startsWith(`ALTER TABLE ${quote}users${quote} ADD COLUMN ${column}`)), kind);
+    assert.ok(queries.some(sql => sql.startsWith(`ALTER TABLE ${quote}users${quote} ADD COLUMN ${kind === "postgresql" ? "IF NOT EXISTS " : ""}${column}`)), kind);
   }
 });

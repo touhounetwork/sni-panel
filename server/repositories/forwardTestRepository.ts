@@ -6,6 +6,7 @@ import { quoteIdentifier, boolLiteral } from "../dbCompat";
 import { selfTestSweepActivity, SELF_TEST_MAX_LIFETIME_SECONDS, selfTestTimeoutSeconds } from "../selfTestTiming";
 import { structuredLinkTestMessage } from "../linkTestMessages";
 import { deleteExpiredHistoryRows } from "./historyRetention";
+import { buildPortEntrySelfTestResult } from "../portEntrySelfTest";
 
 // ==================== Forward Tests ====================
 
@@ -154,10 +155,13 @@ export async function getLatestForwardTest(ruleId: number, options: { includeAct
   const batchCol = quoteIdentifier("batchId");
   const [newest] = await queryRaw<any>(`SELECT * FROM ${table} WHERE ${ruleCol} = ? ORDER BY ${idCol} DESC LIMIT 1`, [ruleId]);
   if (!newest) return undefined;
-  // Every segment belongs to this round; a fast reporter never replaces its siblings.
-  if (String(newest.batchId || "").startsWith("rt-")) {
-    const batch = await queryRaw<any>(`SELECT * FROM ${table} WHERE ${ruleCol} = ? AND ${batchCol} = ? ORDER BY ${idCol}`, [ruleId, newest.batchId]);
-    return buildRuleTunnelProbeResult(batch);
+  // A rule tunnel ("rt-") or multi-entry port ("pe-") batch is one logical test:
+  // every segment belongs to this round; a fast reporter never replaces its siblings.
+  if (/^(rt|pe)-/.test(String(newest.batchId || ""))) {
+    const batchRows = await queryRaw<any>(
+      `SELECT * FROM ${table} WHERE ${ruleCol} = ? AND ${batchCol} = ? ORDER BY ${idCol}`, [ruleId, newest.batchId],
+    );
+    return String(newest.batchId).startsWith("pe-") ? buildPortEntrySelfTestResult(batchRows) : buildRuleTunnelProbeResult(batchRows);
   }
   if (options.includeActive !== false) {
     if (String(newest.batchId || "").startsWith("fc-")) {

@@ -1,4 +1,3 @@
-import nodemailer from "nodemailer";
 import * as db from "./db";
 import {
   buildSmtpTransportOptions,
@@ -34,7 +33,31 @@ export async function getEmailConfig() {
     expiryReminder: settings.emailExpiryReminder === "true",
     trafficReminder: settings.emailTrafficReminder === "true",
     trafficReminderThreshold: Number(settings.emailTrafficReminderThreshold || 20),
+    adminCopy: settings.emailAdminCopy === "true",
+    adminCopyTo: settings.emailAdminCopyTo || "",
   };
+}
+
+const MAX_ADMIN_COPY_RECIPIENTS = 20;
+const EMAIL_ADDRESS_PATTERN = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
+
+/** 解析「抄送管理员」的接收邮箱，支持逗号、分号、空格和换行分隔。 */
+export function parseAdminCopyRecipients(raw: unknown) {
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  for (const part of String(raw ?? "").split(/[\s,;，；]+/)) {
+    if (!part) continue;
+    if (!EMAIL_ADDRESS_PATTERN.test(part)) {
+      invalid.push(part);
+      continue;
+    }
+    const key = part.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    valid.push(part);
+  }
+  return { valid: valid.slice(0, MAX_ADMIN_COPY_RECIPIENTS), invalid };
 }
 
 export async function sendMail(payload: MailPayload) {
@@ -42,6 +65,7 @@ export async function sendMail(payload: MailPayload) {
   if (!config.enabled) return { skipped: true, reason: "email disabled" };
   if (!config.host || !config.from) throw new Error("邮件服务未配置完整");
 
+  const nodemailer = (await import("nodemailer")).default;
   const transporter = nodemailer.createTransport(buildSmtpTransportOptions(config));
   try {
     const result = await withSmtpOperationTimeout(
@@ -57,7 +81,7 @@ export async function sendMail(payload: MailPayload) {
     );
     return { skipped: false, messageId: result.messageId };
   } catch (error) {
-    throw new Error(smtpErrorMessage(error, config.port, config.security));
+    throw Object.assign(new Error(smtpErrorMessage(error, config.port, config.security)), { cause: error });
   } finally {
     transporter.close();
   }

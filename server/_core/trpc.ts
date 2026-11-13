@@ -8,6 +8,8 @@ import { runWithConfigAuditContext } from "../configAudit";
 import { databaseHealth, isDatabaseBusyError } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
 import { displayQueries } from "../displayQueryCache";
+import { isDatabaseGuardRequestError } from "../databaseNetworkGuard";
+import { IMPERSONATION_MONEY_BLOCKED, IMPERSONATION_SECURITY_BLOCKED, isImpersonationMoneyOrCredentialWrite } from "../../shared/userImpersonation";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -15,6 +17,15 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 const databaseSafeProcedure = t.procedure.use(async ({ next, type, ctx, path }) => {
+  if (ctx.impersonation && type === "mutation" && path !== "auth.logout" &&
+    /^(auth|users|google|telegram|discord|setup)\./.test(path)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: IMPERSONATION_SECURITY_BLOCKED });
+  }
+  // Local rule: an administrator viewing a user's backend never spends,
+  // redeems or withdraws money, or mints/revokes credentials, on their behalf.
+  if (ctx.impersonation && type === "mutation" && isImpersonationMoneyOrCredentialWrite(path)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: IMPERSONATION_MONEY_BLOCKED });
+  }
   if (databaseHealth.snapshot().state === "unavailable") {
     throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
   }
@@ -25,7 +36,10 @@ const databaseSafeProcedure = t.procedure.use(async ({ next, type, ctx, path }) 
   let result;
   try { result = await next(); }
   finally { if (invalidatesDisplay) displayQueries.invalidate(ctx.user!); }
-  if (!result.ok && isDatabaseBusyError(result.error)) {
+  if (ctx.impersonation && type === "mutation" && path !== "hosts.watchMetrics") {
+    console.info(`[UserEntry] action adminId=${ctx.impersonation.actorId} targetId=${ctx.user?.id} path=${path} status=${result.ok ? "ok" : "failed"}`);
+  }
+  if (!result.ok && (isDatabaseBusyError(result.error) || isDatabaseGuardRequestError(result.error))) {
     throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: SERVICE_BUSY_MESSAGE, cause: result.error });
   }
   if (!result.ok && databaseHealth.snapshot().state === "unavailable") {
@@ -52,9 +66,9 @@ const requireUser = t.middleware(async opts => {
   }
 
   return runWithConfigAuditContext({
-    actorUserId: Number(ctx.user.id),
-    actorName: String(ctx.user.username || ctx.user.name || ""),
-    source: "panel:trpc",
+    actorUserId: ctx.impersonation?.actorId ?? Number(ctx.user.id),
+    actorName: ctx.impersonation?.actorName ?? String(ctx.user.username || ctx.user.name || ""),
+    source: ctx.impersonation ? "panel:impersonation" : "panel:trpc",
     requestId: String(ctx.req.headers["x-request-id"] || "") || undefined,
     requestPath: opts.path,
   }, () => next({ ctx: { ...ctx, user: ctx.user } }));
@@ -78,7 +92,7 @@ export const adminProcedure = databaseSafeProcedure.use(
       ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
       throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
     }
-    if (ctx.user.role !== 'admin') {
+    if (ctx.impersonation || ctx.user.role !== 'admin') {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
 

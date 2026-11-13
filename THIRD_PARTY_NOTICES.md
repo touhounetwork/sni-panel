@@ -1,5 +1,33 @@
 # Third-Party Notices
 
+## ForwardX runtime / GOST
+
+- Upstream: <https://github.com/go-gost/gost>, version 3.2.6.
+- Pinned source commit: `340ba32ef0bebc7293908007cc423dd5f33dd88c`.
+- License: MIT. Copyright (c) 2016 ginuerzh.
+- Usage: built from pinned upstream source as `forwardx-runtime` for Linux amd64/arm64.
+- Modifications: CLI product label, version/build identity, and a node-level FIFO/HA selector fix to avoid repeatedly retrying known-failed upstreams while healthy alternatives exist. Protocols and configuration syntax are retained. The patch is in `scripts/runtime-patches/`, applied to a private copy of the pinned `go-gost/x v0.8.1` dependency; the shared module cache is never modified.
+- Build recipe: `scripts/build-runtime.sh`; source archive SHA-256 is pinned in `shared/runtimeBuild.ts`. Bundles include `dist/agent/RUNTIME_LICENSE.txt` and `dist/agent/RUNTIME_BUILD.txt` for full upstream license and source/build/checksum provenance.
+- Distribution: compiled locally by the maintainer for an independent runtime release (currently pinned to `runtime-v3.2.6-forwardx.2`). Publish its immutable artifacts before publishing dependent panel or Agent packages. Panel, Docker and Agent packages fetch these same artifacts with pinned SHA-256 verification via `scripts/fetch-runtime.sh`; they do not rebuild or fall back to upstream binaries.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## resvg-js (build tool only)
 
 - Package: `@resvg/resvg-js` 2.6.2, MPL-2.0.

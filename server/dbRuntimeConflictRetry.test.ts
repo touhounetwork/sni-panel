@@ -20,13 +20,16 @@ function runMysqlScenario(scenario: string) {
       query: async sql => [[{ version: "8.0.36" }], []],
       end: async () => {},
       getConnection: async () => {
-        checkouts++;
+        // The network guard also checks out connections for plain pool.query
+        // calls; count only the connections that run a transaction.
+        let transactional = false;
         return {
-          beginTransaction: async () => { pendingBalance = balance; },
+          query: async sql => [[{ version: "8.0.36" }], []],
+          beginTransaction: async () => { transactional = true; checkouts++; pendingBalance = balance; },
           execute: async (sql, params) => { pendingBalance -= params[0]; return [{ affectedRows: 1 }, []]; },
           commit: async () => { commits++; balance = pendingBalance; if (commitError) throw commitError; },
           rollback: async () => { rollbacks++; if (rollbackError) throw rollbackError; pendingBalance = undefined; },
-          release: () => { releases++; if (releaseError) throw releaseError; },
+          release: () => { if (!transactional) return; releases++; if (releaseError) throw releaseError; },
         };
       },
     };

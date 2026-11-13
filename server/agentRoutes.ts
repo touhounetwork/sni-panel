@@ -25,6 +25,7 @@ import {
 } from "./agentAuth";
 import { normalizeAgentText } from "./agentInputValidation";
 import { mergeAgentReportedAddress } from "./agentAddressState";
+import { observeIpSwitchAddress } from "./hostIpSwitchObservation";
 import { scheduleHostDdnsUpdate } from "./hostDdns";
 import { registerAgentStatusRoutes } from "./agentStatusRoutes";
 import { registerAgentSelfTestRoutes } from "./agentSelfTestRoutes";
@@ -460,6 +461,17 @@ agentApiRouter.post("/api/agent/register", async (req: Request, res: Response) =
     const nextAgentVersion = normalizeAgentText(agentVersion, 64);
 
     const existingHost = await db.getHostByAgentToken(token);
+    // Tokens issued through the former ordinary-user endpoint must not create
+    // new hosts. Hosts already registered with them keep working (the Agent
+    // re-registers on every start); only a new registration needs an admin issuer.
+    if (!existingHost) {
+      const issuer = await db.getUserById(agentToken.userId);
+      if (!issuer || issuer.role !== "admin" || issuer.accountEnabled === false) {
+        appendPanelLog("warn", `[AgentRegister] rejected untrusted token issuer user=${agentToken.userId}`);
+        res.status(403).json({ error: "Agent registration requires an enabled administrator-issued token" });
+        return;
+      }
+    }
     if (existingHost) {
       const claim = await claimAgentInstallation(existingHost.id, installationId);
       if (!claim.accepted) { res.json(agentSupersededResponse); return; }
@@ -498,12 +510,15 @@ agentApiRouter.post("/api/agent/register", async (req: Request, res: Response) =
         lastHeartbeat: new Date(),
       });
       if (entryChanged) {
-        await handleHostAddressChanged(
-          existingHost.id,
-          { ...existingHost, ...reportedAddress },
-          existingHost,
-          "agent-address-changed",
-        );
+        const updatedHost = await db.getHostById(existingHost.id);
+        if (!updatedHost || !await observeIpSwitchAddress(updatedHost)) {
+          await handleHostAddressChanged(
+            existingHost.id,
+            { ...existingHost, ...reportedAddress },
+            existingHost,
+            "agent-address-changed",
+          );
+        }
       } else if (["ipv4Addresses", "ipv6Addresses"].some(key => (reportedAddress as any)[key] !== (existingHost as any)[key])) {
         scheduleHostDdnsUpdate({ ...existingHost, ...reportedAddress }, "agent-address-inventory-changed");
       }
@@ -573,25 +588,36 @@ agentApiRouter.post("/api/agent/migration-rollback", async (req: Request, res: R
 agentRouter.use(agentApiRouter);
 
 agentRouter.get("/api/agent/install.sh", async (req: Request, res: Response) => {
-  const panelUrl = await resolvePanelUrl(req);
-  const settings = await db.getAllSettings();
-  const panelMigration = await getPanelMigrationAgentDirective();
-  const abortedFallbackActive = panelMigration?.state === "aborted"
-    && !!panelMigration.startedAt
-    && Math.floor(Date.now() / 1000) - panelMigration.startedAt <= 60 * 60;
-  const migrationFallbackEnabled = panelMigration?.state === "preparing"
-    || panelMigration?.state === "committing"
-    || abortedFallbackActive;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.send(generateInstallScript(panelUrl, {
-    githubAcceleratorEnabled: settings.githubAcceleratorEnabled === "true",
-    githubAcceleratorUrl: settings.githubAcceleratorUrl || "",
-    preferPanelInstall: settings.agentPreferPanelInstall === "true",
-    installNginx: isNginxForwardProtocolEnabled(parseForwardProtocolSettings(settings.forwardProtocols)),
-    migrationFallbackPanelUrl: migrationFallbackEnabled ? panelMigration?.fallbackPanelUrl : undefined,
-    panelMigrationId: migrationFallbackEnabled ? panelMigration?.id : undefined,
-    panelMigrationStartedAt: migrationFallbackEnabled ? panelMigration?.startedAt : undefined,
-  }));
+  // This endpoint is public and is piped into a shell. A failed settings read
+  // must answer with a script that stops, never reject out of the handler.
+  try {
+    const panelUrl = await resolvePanelUrl(req);
+    const settings = await db.getAllSettings();
+    const panelMigration = await getPanelMigrationAgentDirective();
+    const abortedFallbackActive = panelMigration?.state === "aborted"
+      && !!panelMigration.startedAt
+      && Math.floor(Date.now() / 1000) - panelMigration.startedAt <= 60 * 60;
+    const migrationFallbackEnabled = panelMigration?.state === "preparing"
+      || panelMigration?.state === "committing"
+      || abortedFallbackActive;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.send(generateInstallScript(panelUrl, {
+      githubAcceleratorEnabled: settings.githubAcceleratorEnabled === "true",
+      githubAcceleratorUrl: settings.githubAcceleratorUrl || "",
+      preferPanelInstall: settings.agentPreferPanelInstall === "true",
+      installNginx: isNginxForwardProtocolEnabled(parseForwardProtocolSettings(settings.forwardProtocols)),
+      migrationFallbackPanelUrl: migrationFallbackEnabled ? panelMigration?.fallbackPanelUrl : undefined,
+      panelMigrationId: migrationFallbackEnabled ? panelMigration?.id : undefined,
+      panelMigrationStartedAt: migrationFallbackEnabled ? panelMigration?.startedAt : undefined,
+    }));
+  } catch (error) {
+    console.warn(`[Agent] install script unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    if (res.headersSent) { res.end(); return; }
+    res.status(503);
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Retry-After", "10");
+    res.send("echo 'ForwardX panel is temporarily unavailable. Please retry in a moment.' >&2\nexit 1\n");
+  }
 });
 
 agentRouter.get("/api/agent/assets/:version/:asset", async (req: Request, res: Response) => {
@@ -602,7 +628,10 @@ agentRouter.get("/api/agent/assets/:version/:asset", async (req: Request, res: R
     return;
   }
 
-  const filePath = await getOrFetchAgentAssetPath(version, asset);
+  const filePath = await getOrFetchAgentAssetPath(version, asset).catch((error) => {
+    console.warn(`[Agent] asset lookup failed ${asset} v${version}: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  });
   if (!filePath) {
     res.status(503).send("Agent asset not available");
     return;

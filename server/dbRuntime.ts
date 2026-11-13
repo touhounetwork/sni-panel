@@ -4,12 +4,10 @@ import { setQueryCacheIsolationCheck } from "./queryCache";
 import fs from "fs";
 import path from "path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
-import { drizzle as drizzleSqliteProxy } from "drizzle-orm/sqlite-proxy";
-import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
-import mysql, { Pool, PoolOptions, type ConnectionOptions } from "mysql2/promise";
-import pg from "pg";
-import Database from "better-sqlite3";
+import type { Pool, PoolOptions, ConnectionOptions } from "mysql2/promise";
+import type pg from "pg";
+import type Database from "better-sqlite3";
+import { loadMysqlDriver, loadPostgresqlDriver, loadSqliteDriver } from "./databaseDrivers";
 import { SCHEMA_DIALECT } from "../drizzle/schema";
 import { ENV } from "./env";
 import { databasePoolSettingsForHostCount } from "./databasePoolSizing";
@@ -17,6 +15,7 @@ import { databaseHealth } from "./databaseHealthState";
 import { dashboardSummaries, operationsSummaries } from "./backgroundSummaryCache";
 import { seamlessDatabaseOperation } from "./seamlessMigrationState";
 import { retryTransactionConflicts, type TransactionAttemptState } from "./transactionRetry";
+import { guardDatabasePool } from "./databaseNetworkGuard";
 
 export type DatabaseKind = "mysql" | "sqlite" | "postgresql";
 export const MYSQL_MIN_VERSION = "8.0.13";
@@ -177,7 +176,8 @@ async function withSqliteConnectionLock<T>(
   }
 }
 
-function createSqliteDrizzleDatabase(sqlite: Database.Database): Db {
+async function createSqliteDrizzleDatabase(sqlite: Database.Database): Promise<Db> {
+  const { drizzle: drizzleSqliteProxy } = await import("drizzle-orm/sqlite-proxy");
   const callback: any = (sqlText: string, params: any[], method: "run" | "all" | "get" | "values") => (
     seamlessDatabaseOperation(sqlText, () => reportDatabaseErrors(() => withSqliteConnectionLock(sqlite, () => {
       const statement = sqlite.prepare(sqlText);
@@ -519,6 +519,8 @@ function mysqlConnectionOptions(config: MysqlConfig): ConnectionOptions {
     password: config.password,
     database: config.database,
     connectTimeout: pool.connectTimeoutMillis,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10_000,
     timezone: "+00:00",
     dateStrings: false,
     flags: MYSQL_COMPATIBILITY_FLAGS,
@@ -550,6 +552,8 @@ function pgPoolOptions(config: PostgresqlConfig): pg.PoolConfig {
     min: pool.maxIdle,
     idleTimeoutMillis: pool.idleTimeoutMillis,
     connectionTimeoutMillis: pool.connectTimeoutMillis,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
     maxLifetimeSeconds: pool.maxLifetimeSeconds,
     // Let node-postgres use its default CA validation when TLS is enabled.
     // Passing rejectUnauthorized=false would allow a man-in-the-middle attack.
@@ -560,18 +564,19 @@ function pgPoolOptions(config: PostgresqlConfig): pg.PoolConfig {
 
 export async function testMysqlConnection(config: MysqlConfig) {
   const normalized = normalizeMysql(config);
-  const conn = await mysql.createConnection(mysqlConnectionOptions(normalized));
+  const mysql = await loadMysqlDriver();
+  const pool = guardDatabasePool(mysql.createPool({ ...poolOptions(normalized), connectionLimit: 1, maxIdle: 1 }), "mysql", () => ({ ...getDatabasePoolSettings(), maxOpen: 1 }));
   try {
-    await conn.ping();
-    await assertSupportedMysqlServer((sqlText) => conn.query(sqlText));
-  } finally {
-    await conn.end();
-  }
+    await pool.query("SELECT 1");
+    await assertSupportedMysqlServer((sqlText) => pool.query(sqlText));
+  } finally { await pool.end(); }
 }
 
 export async function testPostgresqlConnection(config: PostgresqlConfig) {
   const normalized = normalizePostgresql(config);
-  const pool = new pg.Pool(pgPoolOptions(normalized));
+  const pg = await loadPostgresqlDriver();
+  const pool = guardDatabasePool(new pg.Pool(pgPoolOptions(normalized)), "postgresql", getDatabasePoolSettings);
+  pool.on("error", () => {});
   try {
     await pool.query("SELECT 1");
   } finally {
@@ -579,8 +584,9 @@ export async function testPostgresqlConnection(config: PostgresqlConfig) {
   }
 }
 
-export function testSqliteConnection(config: SqliteConfig) {
+export async function testSqliteConnection(config: SqliteConfig) {
   const normalized = normalizeSqlite(config);
+  const Database = await loadSqliteDriver();
   fs.mkdirSync(path.dirname(normalized.path), { recursive: true });
   const sqlite = new Database(normalized.path);
   try {
@@ -598,7 +604,7 @@ export async function testDatabaseConnection(config: DatabaseConfig) {
   } else if (config.type === "postgresql") {
     await testPostgresqlConnection(config.postgresql);
   } else {
-    testSqliteConnection(config.sqlite);
+    await testSqliteConnection(config.sqlite);
   }
 }
 
@@ -649,7 +655,10 @@ async function connectDatabaseOnce(config: DatabaseConfig | null) {
 
   if (config.type === "mysql") {
     const normalized = normalizeMysql(config.mysql);
-    _pool = mysql.createPool(poolOptions(normalized));
+    const [mysql, { drizzle: drizzleMysql }] = await Promise.all([
+      loadMysqlDriver(), import("drizzle-orm/mysql2"),
+    ]);
+    _pool = guardDatabasePool(mysql.createPool(poolOptions(normalized)), "mysql", getDatabasePoolSettings);
     await _pool.query("SELECT 1");
     await assertSupportedMysqlServer((sqlText) => _pool!.query(sqlText));
     _db = drizzleMysql(reportingDatabaseClient(_pool)) as Db;
@@ -660,7 +669,10 @@ async function connectDatabaseOnce(config: DatabaseConfig | null) {
 
   if (config.type === "postgresql") {
     const normalized = normalizePostgresql(config.postgresql);
-    _pgPool = new pg.Pool(pgPoolOptions(normalized));
+    const [pg, { drizzle: drizzlePostgres }] = await Promise.all([
+      loadPostgresqlDriver(), import("drizzle-orm/node-postgres"),
+    ]);
+    _pgPool = guardDatabasePool(new pg.Pool(pgPoolOptions(normalized)), "postgresql", getDatabasePoolSettings);
     // node-postgres emits idle-client disconnects on the pool. Without an
     // error listener, stopping PostgreSQL can terminate the entire Node process.
     _pgPool.on("error", (error) => { databaseHealth.unavailable(error); });
@@ -672,11 +684,12 @@ async function connectDatabaseOnce(config: DatabaseConfig | null) {
   }
 
   const normalized = normalizeSqlite(config.sqlite);
+  const Database = await loadSqliteDriver();
   fs.mkdirSync(path.dirname(normalized.path), { recursive: true });
   _sqlite = new Database(normalized.path);
   _sqlite.pragma("journal_mode = WAL");
   _sqlite.pragma("foreign_keys = ON");
-  _db = createSqliteDrizzleDatabase(_sqlite);
+  _db = await createSqliteDrizzleDatabase(_sqlite);
   _kind = "sqlite";
   console.log(`[Database] SQLite opened at ${normalized.path}`);
   return _db;
@@ -854,7 +867,9 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>, attempt: Transa
   if (!_db || !_kind) await connectDatabase();
   if (_kind === "mysql") {
     if (!_pool) throw new DatabaseNotConfiguredError("MySQL database is not connected");
-    const connection = await _pool.getConnection();
+    const pool = _pool;
+    const { drizzle: drizzleMysql } = await import("drizzle-orm/mysql2");
+    const connection = await pool.getConnection();
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;
@@ -892,7 +907,9 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>, attempt: Transa
   }
   if (_kind === "postgresql") {
     if (!_pgPool) throw new DatabaseNotConfiguredError("PostgreSQL database is not connected");
-    const client = await _pgPool.connect();
+    const pool = _pgPool;
+    const { drizzle: drizzlePostgres } = await import("drizzle-orm/node-postgres");
+    const client = await pool.connect();
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;

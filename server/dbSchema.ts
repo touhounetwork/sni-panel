@@ -202,7 +202,7 @@ const tables: TableDef[] = [
   ], unique: [["groupId", "ruleId", "hostId"]], indexes: [["ruleId"]] },
   // Provider credentials and action state must be reconfigured after core merge migrations.
   { name: "host_probe_health", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("config", "text", { notNull: true }), c("hookCiphertext", "longtext"), c("state", "text"), c("updatedAt", "epoch", { notNull: true })], unique: [["serviceId"]], indexes: [["hostId"]] },
-  { name: "host_ip_switch_attempts", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("serviceId", "int", { notNull: true }), c("incidentId", "varchar", { length: 64, notNull: true }), c("status", "varchar", { length: 40, notNull: true }), c("createdAt", "epoch", { notNull: true }), c("finishedAt", "epoch"), c("newIp", "varchar", { length: 64 }), c("acknowledged", "bool", { notNull: true, default: false })], unique: [["incidentId"]], indexes: [["hostId", "createdAt"], ["serviceId", "createdAt"], ["createdAt", "id"]] },
+  { name: "host_ip_switch_attempts", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("serviceId", "int", { notNull: true }), c("incidentId", "varchar", { length: 64, notNull: true }), c("status", "varchar", { length: 40, notNull: true }), c("reason", "varchar", { length: 40 }), c("httpStatus", "int"), c("createdAt", "epoch", { notNull: true }), c("finishedAt", "epoch"), c("cooldownUntil", "epoch"), c("oldIp", "varchar", { length: 64 }), c("addressSnapshot", "text"), c("newIp", "varchar", { length: 64 }), c("acknowledged", "bool", { notNull: true, default: false })], unique: [["incidentId"]], indexes: [["hostId", "createdAt"], ["serviceId", "createdAt"], ["status", "createdAt"], ["createdAt", "id"]] },
   { name: "operations_alert_state", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("metric", "varchar", { length: 16, notNull: true }), c("phase", "varchar", { length: 16, notNull: true }), c("since", "epoch", { notNull: true }), c("lastSeen", "epoch", { notNull: true }), c("peak", "int", { notNull: true })], unique: [["hostId", "metric"]], indexes: [["lastSeen"]] },
   { name: "resource_alert_service_state", columns: [c("id", "id"), c("serviceId", "varchar", { length: 64, notNull: true }), c("hostId", "int", { notNull: true }), c("metric", "varchar", { length: 16, notNull: true }), c("phase", "varchar", { length: 16, notNull: true }), c("since", "epoch", { notNull: true }), c("lastSeen", "epoch", { notNull: true }), c("peak", "int", { notNull: true })], unique: [["hostId", "serviceId"]], indexes: [["lastSeen"]] },
   { name: "operations_alert_events", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("hostName", "varchar", { length: 255, notNull: true }), c("serviceId", "varchar", { length: 64 }), c("serviceName", "varchar", { length: 80 }), c("metric", "varchar", { length: 16, notNull: true }), c("type", "varchar", { length: 16, notNull: true }), c("value", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true })], indexes: [["createdAt"], ["hostId", "createdAt"]] },
@@ -362,6 +362,7 @@ const tables: TableDef[] = [
       c("ipv4", "text"), c("ipv6", "text"), c("hostType", "varchar", { length: 32, notNull: true, default: "slave" }),
       c("ipv4Addresses", "text"), c("ipv6Addresses", "text"), c("preferredIpv4", "text"), c("preferredIpv6", "text"),
       c("agentToken", "text"), c("agentInstallationId", "varchar", { length: 64 }), c("entryIp", "text"), c("tunnelEntryIp", "text"), c("osInfo", "text"), c("cpuInfo", "text"),
+      c("agentPanelUrlEnabled", "bool", { notNull: true, default: false }), c("agentPanelUrl", "text"),
       c("memoryTotal", "bigint"), c("agentVersion", "text"),
       c("mimicAvailable", "bool"), c("mimicVersion", "text"), c("mimicStatus", "varchar", { length: 64 }),
       c("mimicMessage", "text"), c("mimicCheckedAt", "epoch"),
@@ -603,8 +604,8 @@ const tables: TableDef[] = [
   { name: "user_tunnel_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "tunnelId"]], indexes: [["tunnelId"]] },
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
   { name: "system_settings", columns: [c("key", "varchar", { length: 191, notNull: true }), c("value", "longtext"), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["key"]] },
-  { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("stockReserved", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("merchantIdentity", "text"), c("failureReason", "text"), c("lastPaymentCheckAt", "epoch"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"], ["status", "lastPaymentCheckAt"]] },
-  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("stockLimit", "int", { notNull: true, default: 0 }), c("stockUsed", "int", { notNull: true, default: 0 }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })] },
+  { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("stockReserved", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("merchantIdentity", "text"), c("failureReason", "text"), c("lastPaymentCheckAt", "epoch"), c("adminDismissedAt", "epoch"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"], ["status", "lastPaymentCheckAt"]] },
+  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("stockLimit", "int", { notNull: true, default: 0 }), c("stockUsed", "int", { notNull: true, default: 0 }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficMode", "varchar", { length: 16, notNull: true, default: "both" }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })] },
   { name: "subscription_plan_hosts", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "hostId"]] },
   { name: "subscription_plan_tunnels", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "tunnelId"]] },
   { name: "subscription_plan_forward_groups", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
@@ -831,29 +832,67 @@ function indexName(prefix: string, table: string, cols: string[]) {
 }
 
 async function ensurePostgresqlSchema(pool: pg.Pool) {
+  // Resolve through the same search_path as unqualified DDL, including quoted,
+  // case-sensitive names. Inspect once instead of using duplicate-column
+  // exceptions as a normal startup path (roughly a thousand failed ALTERs).
+  const names = tables.map(table => table.name);
+  const readColumns = async (tableNames: string[]) => (await pool.query<{ table_name: string; column_name: string }>(
+    `SELECT t.table_name, a.attname AS column_name
+     FROM unnest($1::text[]) AS t(table_name)
+     JOIN pg_catalog.pg_attribute a ON a.attrelid = pg_catalog.to_regclass(pg_catalog.quote_ident(t.table_name))
+     WHERE a.attnum > 0 AND NOT a.attisdropped`, [tableNames],
+  )).rows;
+  const existingColumns = new Map<string, Set<string>>();
+  for (const row of await readColumns(names)) {
+    if (!existingColumns.has(row.table_name)) existingColumns.set(row.table_name, new Set());
+    existingColumns.get(row.table_name)!.add(row.column_name);
+  }
+  const existingIndexes = new Map<string, Set<string>>();
+  const indexes = await pool.query<{ table_name: string; index_name: string }>(
+    `SELECT t.table_name, c.relname AS index_name
+     FROM unnest($1::text[]) AS t(table_name)
+     JOIN pg_catalog.pg_index i ON i.indrelid = pg_catalog.to_regclass(pg_catalog.quote_ident(t.table_name))
+     JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid`, [names],
+  );
+  for (const row of indexes.rows) {
+    if (!existingIndexes.has(row.table_name)) existingIndexes.set(row.table_name, new Set());
+    existingIndexes.get(row.table_name)!.add(row.index_name);
+  }
+  let addedTables = 0, addedColumns = 0, addedIndexes = 0;
   for (const table of tables) {
-    const columns = table.columns.map((column) => columnSql("postgresql", column)).filter(Boolean);
-    const unique = (table.unique || []).map((cols) => `UNIQUE (${cols.map((col) => quote("postgresql", col)).join(", ")})`);
-    await pool.query(
-      `CREATE TABLE IF NOT EXISTS ${quote("postgresql", table.name)} (${[...columns, ...unique].join(", ")})`,
-    );
+    if (!existingColumns.has(table.name)) {
+      const columns = table.columns.map((column) => columnSql("postgresql", column)).filter(Boolean);
+      const unique = (table.unique || []).map((cols) => `UNIQUE (${cols.map((col) => quote("postgresql", col)).join(", ")})`);
+      await pool.query(`CREATE TABLE IF NOT EXISTS ${quote("postgresql", table.name)} (${[...columns, ...unique].join(", ")})`);
+      // Another instance may have created an older shape since inspection.
+      existingColumns.set(table.name, new Set((await readColumns([table.name])).map(row => row.column_name)));
+      addedTables++;
+    }
     for (const column of table.columns) {
-      if (column.type === "id") continue;
-      await pool.query(`ALTER TABLE ${quote("postgresql", table.name)} ADD COLUMN ${columnSql("postgresql", column, true)}`).catch(() => undefined);
+      if (column.type === "id" || existingColumns.get(table.name)!.has(column.name)) continue;
+      // IF NOT EXISTS handles a concurrent upgrade; permission, lock, data and
+      // storage failures must abort initialization instead of being swallowed.
+      await pool.query(`ALTER TABLE ${quote("postgresql", table.name)} ADD COLUMN IF NOT EXISTS ${columnSql("postgresql", column, true)}`);
+      existingColumns.get(table.name)!.add(column.name);
+      addedColumns++;
     }
-    for (const cols of table.indexes || []) {
-      const name = quote("postgresql", indexName("idx", table.name, cols));
-      await pool.query(`CREATE INDEX IF NOT EXISTS ${name} ON ${quote("postgresql", table.name)} (${cols.map((col) => quote("postgresql", col)).join(", ")})`).catch(() => undefined);
-    }
-    for (const cols of table.unique || []) {
-      const name = quote("postgresql", indexName("uniq", table.name, cols));
-      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${quote("postgresql", table.name)} (${cols.map((col) => quote("postgresql", col)).join(", ")})`).catch(() => undefined);
+    for (const [prefix, groups] of [["idx", table.indexes || []], ["uniq", table.unique || []]] as const) {
+      for (const cols of groups) {
+        const name = indexName(prefix, table.name, cols);
+        if (existingIndexes.get(table.name)?.has(name)) continue;
+        await pool.query(`CREATE ${prefix === "uniq" ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quote("postgresql", name)} ON ${quote("postgresql", table.name)} (${cols.map((col) => quote("postgresql", col)).join(", ")})`);
+        addedIndexes++;
+      }
     }
   }
-  for (const [key, value] of seedSettings) {
+  if (addedTables || addedColumns || addedIndexes) {
+    console.info(`[DatabaseSchema] PostgreSQL schema updated tables=${addedTables} columns=${addedColumns} indexes=${addedIndexes}`);
+  }
+  if (seedSettings.length) {
+    const values = seedSettings.map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2}, EXTRACT(EPOCH FROM NOW())::INT)`).join(", ");
     await pool.query(
-      'INSERT INTO system_settings ("key", value, "updatedAt") VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::INT) ON CONFLICT ("key") DO NOTHING',
-      [key, value],
+      `INSERT INTO system_settings ("key", value, "updatedAt") VALUES ${values} ON CONFLICT ("key") DO NOTHING`,
+      seedSettings.flatMap(([key, value]) => [key, value]),
     );
   }
   const sidebarRows = await pool.query('SELECT value FROM system_settings WHERE "key" = $1', ["sidebarMenu"]);

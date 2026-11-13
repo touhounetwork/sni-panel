@@ -8,9 +8,7 @@ GO_HOME_ROOT="${HOME:-}"
 XDG_CACHE_ROOT="${XDG_CACHE_HOME:-}"
 REQUESTED_TAG="${1:-}"
 MIN_GO_MAJOR=1
-MIN_GO_MINOR=23
-GOST_VERSION="${GOST_VERSION:-3.2.6}"
-GOST_VERSION="${GOST_VERSION#v}"
+MIN_GO_MINOR=24
 AGENT_VERSION="$(sed -nE "s/.*AGENT_VERSION[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" "$ROOT_DIR/shared/versions.ts" | head -n 1)"
 if [ -z "$AGENT_VERSION" ]; then
   echo "[agent] AGENT_VERSION not found in shared/versions.ts" >&2
@@ -88,27 +86,7 @@ build_fxp() {
 
 build_fxp amd64 forwardx-fxp-linux-amd64
 
-download_gost_runtime() {
-  local gost_arch="$1"
-  local out="$2"
-  local tmp url gost_bin
-  echo "[runtime] downloading go-gost v${GOST_VERSION} linux/${gost_arch} -> ${out}"
-  tmp="$(mktemp -d)"
-  url="https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${gost_arch}.tar.gz"
-  rm -f "$OUT_DIR/$out"
-  node "$ROOT_DIR/scripts/release/network-retry.mjs" curl -fsSL --connect-timeout 15 --max-time 120 -o "$tmp/gost.tgz" "$url"
-  tar -xzf "$tmp/gost.tgz" -C "$tmp"
-  gost_bin="$(find "$tmp" -type f -name gost | head -n1)"
-  if [ -z "$gost_bin" ]; then
-    echo "[runtime] gost binary not found in ${url}" >&2
-    rm -rf "$tmp"
-    exit 1
-  fi
-  install -m 0755 "$gost_bin" "$OUT_DIR/$out"
-  rm -rf "$tmp"
-}
-
-download_gost_runtime amd64 forwardx-runtime-linux-amd64
+bash "$ROOT_DIR/scripts/build-runtime.sh" amd64
 
 NOTICE_FILE="$ROOT_DIR/THIRD_PARTY_NOTICES.md"
 if [ ! -f "$NOTICE_FILE" ]; then
@@ -117,7 +95,7 @@ if [ ! -f "$NOTICE_FILE" ]; then
 fi
 cp "$NOTICE_FILE" "$OUT_DIR/THIRD_PARTY_NOTICES.md"
 
-(cd "$OUT_DIR" && sha256sum forwardx-agent-linux-amd64 forwardx-fxp-linux-amd64 forwardx-runtime-linux-amd64 THIRD_PARTY_NOTICES.md > SHA256SUMS)
+(cd "$OUT_DIR" && sha256sum forwardx-agent-linux-amd64 forwardx-fxp-linux-amd64 forwardx-runtime-linux-amd64 RUNTIME_BUILD.txt RUNTIME_LICENSE.txt THIRD_PARTY_NOTICES.md > SHA256SUMS)
 
 echo "[agent] release artifacts:"
 ls -lh "$OUT_DIR"

@@ -5,7 +5,7 @@ import { pushAgentRefresh } from "./agentEvents";
 import { reconcileRuleLimits } from "./ruleLimits";
 import { appendPanelLog } from "./_core/panelLogger";
 import { parseSelfTestMeta } from "./agentRouteUtils";
-import { getEmailConfig, sendMail } from "./email";
+import { runEmailReminderSweep } from "./emailReminders";
 import { sendUserNotification, notificationRecipientId } from "./notifications";
 import { notificationSettings } from "./notificationSettings";
 import { recordTunnelHopTestResult } from "./tunnelHopTestState";
@@ -23,8 +23,8 @@ import { cleanOperationsHistory } from "./repositories/operationsRepository";
 import { runHistoryMaintenance } from "./historyMaintenance";
 import { cleanMonitorHistory } from "./operationsMonitor";
 import { cleanProbeHealthHistory } from "./hostProbeHealth";
+import { reconcileIpSwitchAddresses } from "./hostIpSwitchObservation";
 import { reconcileHostDdnsRecords } from "./hostDdns";
-import { checkPanelUpdateTask } from "./_core/systemRouter";
 import { createNonOverlappingScheduledTask as createScheduledTask } from "./scheduledTask";
 import { databaseHealth } from "./databaseHealthState";
 import { runOperationsDailyReport } from "./operationsDailyReport";
@@ -50,8 +50,6 @@ type TimedOutForwardTest = {
 function timeoutSecondsForForwardTest(test: TimedOutForwardTest) {
   return selfTestTimeoutSeconds(parseSelfTestMeta(test.requestMessage ?? test.message));
 }
-
-const UPDATE_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 let hostStatusPrimePromise: Promise<void> | null = null;
 
@@ -377,6 +375,7 @@ async function runTcpingCleanup() {
     ["operations", cleanOperationsHistory],
     ["operations-monitor", cleanMonitorHistory],
     ["probe-health", cleanProbeHealthHistory],
+    ["reminder-markers", () => db.cleanOldReminderMarkers()],
   ], { shouldContinue: () => databaseHealth.snapshot().state !== "unavailable" });
 }
 
@@ -386,43 +385,7 @@ function dayKey(prefix: string, userId: number) {
 
 async function runEmailReminders() {
   try {
-    const config = await getEmailConfig();
-    if (!config.enabled) return;
-    const users = await db.getUserTrafficSummaries();
-    const now = Date.now();
-
-    for (const user of users as any[]) {
-      if (!user.email) continue;
-
-      if (config.expiryReminder && user.expiresAt) {
-        const expiresAt = new Date(user.expiresAt).getTime();
-        const daysLeft = Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000));
-        const key = dayKey(`emailReminder:expiry:${daysLeft}`, user.id);
-        if (daysLeft >= 0 && daysLeft <= 3 && !(await db.getSetting(key))) {
-          await sendMail({
-            to: user.email,
-            subject: "ForwardX 套餐到期提醒",
-            text: `你的 ForwardX 套餐将在 ${daysLeft} 天后到期，请及时续费或联系管理员。`,
-          });
-          await db.setSetting(key, "sent");
-        }
-      }
-
-      if (config.trafficReminder && Number(user.trafficLimit || 0) > 0) {
-        const used = Number(user.trafficUsed || 0);
-        const limit = Number(user.trafficLimit || 0);
-        const leftPercent = Math.max(0, Math.round(((limit - used) / limit) * 100));
-        const key = dayKey("emailReminder:traffic", user.id);
-        if (leftPercent <= config.trafficReminderThreshold && !(await db.getSetting(key))) {
-          await sendMail({
-            to: user.email,
-            subject: "ForwardX 流量余量提醒",
-            text: `你的 ForwardX 流量剩余约 ${leftPercent}%，请及时续费或联系管理员。`,
-          });
-          await db.setSetting(key, "sent");
-        }
-      }
-    }
+    await runEmailReminderSweep();
   } catch (error) {
     console.error("[Scheduler] Email reminder error:", error);
   }
@@ -618,14 +581,6 @@ async function primeForwardGroupLivenessWithRetry() {
   }
 }
 
-async function runUpdateAutoCheck() {
-  try {
-    await checkPanelUpdateTask(false);
-  } catch (error: any) {
-    console.warn("[Scheduler] Update auto-check error:", error?.message || error);
-  }
-}
-
 function hostTrafficUsageBytes(traffic: any, mode: unknown) {
   const bytesIn = Number(traffic?.bytesIn || 0);
   const bytesOut = Number(traffic?.bytesOut || 0);
@@ -686,6 +641,7 @@ export function startScheduler() {
     await runForwardGroupFailover();
     await runHostDdnsReconcile();
   });
+  const ipSwitchObservation = createNonOverlappingScheduledTask("IP change observation and runtime sync", reconcileIpSwitchAddresses);
   const portEntryMaintenance = createNonOverlappingScheduledTask("port entry-group reconciliation", async () => {
     await db.reconcilePortEntryGroups();
   });
@@ -698,9 +654,6 @@ export function startScheduler() {
   const reminderSweep = createNonOverlappingScheduledTask("email and bot reminders", async () => {
     await runEmailReminders();
     await runTelegramReminders();
-  }, { slowTaskMs: 15_000 });
-  const updateCheck = createNonOverlappingScheduledTask("panel update check", async () => {
-    await runUpdateAutoCheck();
   }, { slowTaskMs: 15_000 });
   const databasePoolSizing = createNonOverlappingScheduledTask("database pool sizing", async () => {
     await db.refreshDatabasePoolSettings();
@@ -744,6 +697,7 @@ export function startScheduler() {
   // Let the liveness prime's startup grace accept a live Agent presence before
   // the broad recovery sweep evaluates persisted heartbeat timestamps.
   repeatAfter(forwardingMaintenance, 5 * 60 * 1000, 20_000);
+  repeatAfter(ipSwitchObservation, 30_000, 22_000);
   repeatAfter(portEntryMaintenance, 60_000, 25_000);
   repeatAfter(expirationCheck, 60 * 60 * 1000, 16_000);
   // Keep host expiry dates responsive without changing the account-expiration
@@ -755,7 +709,7 @@ export function startScheduler() {
   repeatAfter(paymentMaintenance, 60 * 1000, 35_000);
   repeatAfter(operationsDailyReport, 60_000, 40_000);
   repeatAfter(reminderSweep, 6 * 60 * 60 * 1000, 30_000);
-  repeatAfter(updateCheck, UPDATE_AUTO_CHECK_INTERVAL_MS, 45_000);
+  // Remote version/announcement checks are visit-triggered, not scheduled.
   // Short, paced passes catch up old backlogs without a single hourly burst.
   repeatAfter(historyCleanup, 5 * 60_000, 2 * 60_000);
 

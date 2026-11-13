@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const baseline = { os: 'ubuntu-24.04', node: 'v22.23.3', pnpm: '10.28.1', go: 'go1.23.12' };
+export const baseline = { os: 'ubuntu-24.04', node: 'v22.23.3', pnpm: '10.28.1', go: 'go1.24.13' };
 export const groups = {
   prepare: [['pnpm', 'check:versions'], ['pnpm', 'test:release-notes'], ['node', '--test', 'scripts/release/protocol.test.mjs', 'scripts/release/cli.test.mjs'], ['pnpm', 'exec', 'tsc', '--noEmit'], ['pnpm', 'build']],
   language: [['pnpm', 'test:i18n']],
@@ -14,7 +14,7 @@ export const groups = {
   agent: [['bash', 'scripts/release/verify-agent.sh']],
 };
 const scripts = ['ui', 'login-ui', 'startup', 'auth-captcha', 'billing-export', 'host-addresses', 'china-health', 'observability', 'support', 'affiliates', 'avatars', 'latency-history', 'agent-proxy', 'deployment-docs', 'google-auth', 'port-access-limits', 'plan-display', 'product-stock', 'host-deletion', 'host-notifications', 'user-selection', 'operations', 'payments', 'list-settings', 'url-probe', 'motion', 'host-load', 'performance', 'plugin-bbr', 'rule-groups', 'server', 'ai', 'selftest-dispatch', 'sni-classification'];
-scripts.push('rule-batch', 'rule-tasks', 'ai-models', 'globe-ui', 'resource-traffic', 'security-boundaries');
+scripts.push('rule-batch', 'rule-tasks', 'ai-models', 'globe-ui', 'resource-traffic', 'security-boundaries', 'developer-announcements', 'database-network');
 groups.functional = scripts.flatMap(name => name === 'server' ? [['pnpm', 'pretest:server'], ['pnpm', 'test:server']] : [['pnpm', `test:${name}`]]);
 // These two shell integration checks otherwise report SKIP when jq is absent.
 groups.functional.unshift(['bash', '-c', 'command -v jq >/dev/null || { echo "Functional checks require jq; install jq before continuing" >&2; exit 1; }']);

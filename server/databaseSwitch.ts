@@ -2,9 +2,10 @@ import { MYSQL_COMPATIBILITY_FLAGS } from "./mysqlCompatibility";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import mysql, { type Pool, type PoolConnection, type PoolOptions } from "mysql2/promise";
-import pg from "pg";
-import Database from "better-sqlite3";
+import type { Pool, PoolConnection, PoolOptions } from "mysql2/promise";
+import type pg from "pg";
+import type Database from "better-sqlite3";
+import { loadMysqlDriver, loadPostgresqlDriver, loadSqliteDriver } from "./databaseDrivers";
 import { MIGRATION_TABLES, ensureDatabaseSchema, getDatabaseTableDefs, type ColumnDef } from "./dbSchema";
 import {
   type DatabaseConfig,
@@ -22,6 +23,7 @@ import {
 import { ENV } from "./env";
 import { exportMigrationSnapshot, summarizeMigrationSnapshot, type MigrationSnapshotSummary } from "./migration";
 import { maintainPostgresqlDatabase } from "./postgresqlMaintenance";
+import { guardDatabasePool, withDatabaseMaintenanceBudget } from "./databaseNetworkGuard";
 
 export type DatabaseSwitchJobStatus = "pending" | "running" | "success" | "failed";
 export type DatabaseSwitchStage =
@@ -368,16 +370,20 @@ function postgresqlPoolOptions(config: DatabaseConfig & { type: "postgresql" }):
 
 async function openTarget(config: DatabaseConfig): Promise<TargetHandle> {
   if (config.type === "mysql") {
-    const pool = mysql.createPool(mysqlPoolOptions(config));
-    await pool.query("SELECT 1");
+    const mysql = await loadMysqlDriver();
+    const pool = guardDatabasePool(mysql.createPool(mysqlPoolOptions(config)), "mysql", getDatabasePoolSettings);
+    try { await pool.query("SELECT 1"); } catch (error) { await pool.end(); throw error; }
     return { kind: "mysql", pool };
   }
   if (config.type === "postgresql") {
-    const pool = new pg.Pool(postgresqlPoolOptions(config));
-    await pool.query("SELECT 1");
+    const pg = await loadPostgresqlDriver();
+    const pool = guardDatabasePool(new pg.Pool(postgresqlPoolOptions(config)), "postgresql", getDatabasePoolSettings);
+    pool.on("error", () => {});
+    try { await pool.query("SELECT 1"); } catch (error) { await pool.end(); throw error; }
     return { kind: "postgresql", pool };
   }
   const sqlitePath = normalizeSqlitePath(config);
+  const Database = await loadSqliteDriver();
   fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
   const sqlite = new Database(sqlitePath);
   sqlite.pragma("journal_mode = WAL");
@@ -795,7 +801,7 @@ export function startDatabaseSwitch(target: DatabaseConfig) {
   jobs.set(job.id, job);
   activeJobId = job.id;
 
-  void (async () => {
+  void withDatabaseMaintenanceBudget(async () => {
     let handle: TargetHandle | null = null;
     try {
       setJobStage(job, "connection", { status: "running", progress: 5 });
@@ -868,7 +874,7 @@ export function startDatabaseSwitch(target: DatabaseConfig) {
         activeJobId = null;
       }
     }
-  })();
+  });
 
   return job;
 }

@@ -179,22 +179,21 @@ test("animated stat values leave glyph bottoms visible at system-font and zoom b
   assert.match(baseCss, /animation: forwardx-stat-value-change 260ms/);
 });
 
-test("Dashboard stats match the tinted billing cards without ruler decorations", async () => {
+test("Dashboard stats share the metric hierarchy while retaining cached values and hover", async () => {
   const { DashboardStatCard } = await import("@/pages/Home");
   const { Server } = await import("lucide-react");
-  for (const tone of ["teal", "blue", "emerald", "orange"]) {
+  for (const direction of [undefined, "inbound", "outbound"] as const) {
     const html = renderToStaticMarkup(<DashboardStatCard title="Total inbound traffic"
-      value="59.58 GB" subtitle="Cumulative inbound" icon={Server} cacheKey={`test.${tone}`}
-      tone={`bg-gradient-to-br from-${tone}-500 to-${tone}-600`} />);
+      value="59.58 GB" subtitle="Cumulative inbound" icon={Server} cacheKey={`test.${direction}`}
+      direction={direction} />);
     assert.match(html, /Total inbound traffic/);
     assert.match(html, /59\.58 GB/);
     assert.match(html, /Cumulative inbound/);
-    assert.match(html, /pointer-events-none absolute inset-0 opacity-\[0\.04\] dark:opacity-\[0\.07\]/);
-    assert.match(html, /text-2xl font-bold leading-tight tracking-tight tabular-nums/);
-    assert.match(html, /pearl-stat-icon[^"\n]*rounded-full[^"\n]*shadow-sm/);
-    assert.match(html, /h-5 w-5 text-white/);
-    assert.equal((html.match(new RegExp(`from-${tone}-500`, "g")) || []).length, 2);
-    assert.doesNotMatch(html, /pearl-card-featured|font-mono|role="button"/);
+    assert.match(html, /pearl-metric-value/);
+    assert.match(html, /pearl-metric-icon/);
+    assert.match(html, /forwardx-stat-value/);
+    assert.match(html, /pearl-hover-card/);
+    assert.doesNotMatch(html, /gradient|text-white|stagger-card|pearl-card-featured|font-mono|role="button"/);
   }
   assert.doesNotMatch(css, /\.pearl-stat::after|repeating-linear-gradient|\.pearl-stat-value/);
   assert.doesNotMatch(css, /\.pearl-stat-icon\s*\{/);
@@ -377,7 +376,7 @@ test("Sidebar marker follows CSS width instead of measuring every menu item ever
 
 test("Desktop topbar does not duplicate the sidebar toggle and mobile retains its trigger", () => {
   const layout = readFileSync("client/src/components/DashboardLayout.tsx", "utf8");
-  const desktopTopbar = layout.match(/<header className="pearl-topbar">([\s\S]*?)<\/header>/)?.[1];
+  const desktopTopbar = layout.match(/<header\b[^>]*className="pearl-topbar"[^>]*>([\s\S]*?)<\/header>/)?.[1];
   assert.ok(desktopTopbar);
   assert.doesNotMatch(desktopTopbar, /SidebarTrigger/);
   assert.match(layout, /onClick=\{toggleSidebar\}/);
@@ -386,10 +385,10 @@ test("Desktop topbar does not duplicate the sidebar toggle and mobile retains it
 
 test("Theme switching stays in the topbar and mobile header, not the sidebar", () => {
   const layout = readFileSync("client/src/components/DashboardLayout.tsx", "utf8");
-  const sidebar = layout.match(/<Sidebar collapsible="icon"[\s\S]*?<\/Sidebar>/)?.[0];
+  const sidebar = layout.match(/<Sidebar\b[^>]*collapsible="icon"[\s\S]*?<\/Sidebar>/)?.[0];
   assert.ok(sidebar);
   assert.doesNotMatch(sidebar, /onClick=\{toggleTheme\}/);
-  const desktopTopbar = layout.match(/<header className="pearl-topbar">([\s\S]*?)<\/header>/)?.[1];
+  const desktopTopbar = layout.match(/<header\b[^>]*className="pearl-topbar"[^>]*>([\s\S]*?)<\/header>/)?.[1];
   assert.ok(desktopTopbar);
   assert.match(desktopTopbar, /onClick=\{toggleTheme\}/);
   assert.equal((layout.match(/onClick=\{toggleTheme\}/g) || []).length, 2);
@@ -575,11 +574,11 @@ test("standalone card hover is opt-in, pointer-only, reduced-motion safe and dis
 
 test("card shadows ease in and out slowly without delaying layout changes or sortable transforms", () => {
   assert.match(css, /--pearl-card-shadow-duration: 480ms;/);
-  assert.match(css, /--pearl-card-shadow-ease: cubic-bezier\(\.4, 0, \.2, 1\);/);
+  assert.match(css, /--pearl-card-shadow-ease: var\(--pearl-ease\);/);
   const feedback = css.match(/--pearl-card-feedback-transition:([^;]+);/)?.[1];
   assert.ok(feedback);
   assert.match(feedback, /box-shadow var\(--pearl-card-shadow-duration\) var\(--pearl-card-shadow-ease\)/);
-  assert.match(feedback, /min-height 300ms/);
+  assert.doesNotMatch(feedback, /(?:min-)?height|width|margin/);
   assert.match(feedback, /opacity 300ms/);
   assert.doesNotMatch(feedback, /transform|all |will-change/);
   assert.match(css, /^\.pearl-card-interactive,\s*\.pearl-hover-card \{\s*transition: var\(--pearl-card-feedback-transition\);/m);

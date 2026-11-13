@@ -26,7 +26,7 @@ test("MySQL and PostgreSQL create and migrate nullable fractional load columns",
       const column = `${quote}${name}${quote} ${type}`;
       const create = queries.find(sql => sql.startsWith(`CREATE TABLE IF NOT EXISTS ${quote}host_metrics${quote}`));
       assert.ok(create?.includes(column), `${kind} CREATE must retain decimals`);
-      const alter = queries.find(sql => sql.startsWith(`ALTER TABLE ${quote}host_metrics${quote} ADD COLUMN ${column}`));
+      const alter = queries.find(sql => sql.startsWith(`ALTER TABLE ${quote}host_metrics${quote} ADD COLUMN ${kind === "postgresql" ? "IF NOT EXISTS " : ""}${column}`));
       assert.ok(alter, `${kind} upgrades existing metrics tables`);
       assert.ok(!alter.includes("NOT NULL"));
       assert.ok(!alter.includes("DEFAULT 0"));

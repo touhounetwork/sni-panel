@@ -150,17 +150,17 @@ function TokenStatusBadge({ tokenItem }: { tokenItem: any }) {
   const host = tokenItem.host;
   if (!host) {
     return (
-      <Badge variant="secondary" className="shrink-0 gap-1.5 text-[10px]">
+      <Badge variant="secondary" className="shrink-0 gap-1.5 text-[11px]">
         <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />{translateText("未绑定")}</Badge>
     );
   }
 
   const isOnline = isTokenHostOnline(host);
   return isOnline ? (
-    <Badge className="shrink-0 gap-1.5 border-chart-2/25 bg-chart-2/10 text-chart-2 text-[10px]">
+    <Badge className="shrink-0 gap-1.5 border-chart-2/25 bg-chart-2/10 text-chart-2 text-[11px]">
       <span className="h-2 w-2 rounded-full bg-chart-2 shadow-sm shadow-chart-2/50 animate-pulse" />{translateText("在线")}</Badge>
   ) : (
-    <Badge className="shrink-0 gap-1.5 border-destructive/25 bg-destructive/10 text-destructive text-[10px]">
+    <Badge className="shrink-0 gap-1.5 border-destructive/25 bg-destructive/10 text-destructive text-[11px]">
       <span className="h-2 w-2 rounded-full bg-destructive shadow-sm shadow-destructive/50" />{translateText("离线")}</Badge>
   );
 }
@@ -417,6 +417,7 @@ export default function AgentTokenManager({
   const [showNewToken, setShowNewToken] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const [scriptToken, setScriptToken] = useState("");
+  const [scriptPanelUrl, setScriptPanelUrl] = useState("");
   const [reuseInstall, setReuseInstall] = useState<{ command: string; hostName: string; online: boolean } | null>(null);
   const installTokenIds = useRef(new Map<string, number>());
   const [loadingScriptTokenId, setLoadingScriptTokenId] = useState<number | null>(null);
@@ -517,7 +518,8 @@ export default function AgentTokenManager({
     }
   }, [installAddressMode, installAddressOptions]);
   const activeInstallAddress = installAddressOptions.find((option) => option.id === installAddressMode) || installAddressOptions[0];
-  const commandPanelUrl = activeInstallAddress?.url || panelUrl;
+  const defaultCommandPanelUrl = activeInstallAddress?.url || panelUrl;
+  const commandPanelUrl = (showScript && scriptPanelUrl) || defaultCommandPanelUrl;
   const panelUrlUsesLoopback = isLoopbackPanelUrl(commandPanelUrl);
   const githubAcceleratorUrl = normalizeConfigUrl(systemSettings?.githubAccelerator?.url || "");
   const githubAcceleratorActive = !!systemSettings?.githubAccelerator?.enabled && !!githubAcceleratorUrl;
@@ -591,6 +593,7 @@ export default function AgentTokenManager({
       setLoadingScriptTokenId(tokenId);
       const data = await utils.agentTokens.getInstallToken.fetch({ id: tokenId });
       installTokenIds.current.set(data.token, tokenId);
+      setScriptPanelUrl(data.agentPanelUrl || "");
       setScriptToken(data.token);
       setShowScript(true);
     } catch (err: any) {
@@ -663,7 +666,7 @@ export default function AgentTokenManager({
     const bashPrefix = env ? `${env} bash` : "bash";
     const withPipefail = (pipeline: string) => `bash -c ${shellQuote(`set -o pipefail; ${pipeline}`)}`;
     const curlScriptArgs = "--connect-timeout 15 --speed-limit 1024 --speed-time 60";
-    const panelCommand = withPipefail(`curl -fsSL ${curlScriptArgs} "${installPanelUrl}/api/agent/install.sh" | PANEL_URL=${shellQuote(installPanelUrl)} ${bashPrefix} -s -- ${args}`);
+    const panelCommand = withPipefail(`curl -fsSL ${curlScriptArgs} ${shellQuote(`${installPanelUrl}/api/agent/install.sh`)} | PANEL_URL=${shellQuote(installPanelUrl)} ${bashPrefix} -s -- ${args}`);
     const githubScriptUrl = githubAcceleratorActive
       ? `${githubAcceleratorUrl}/${REPO_RAW_BASE_URL}/scripts/install-agent.sh`
       : `${REPO_RAW_BASE_URL}/scripts/install-agent.sh`;
@@ -674,7 +677,7 @@ export default function AgentTokenManager({
     return `${githubCommand} || ${panelCommand}`;
   };
 
-  const getInstallCommand = (token: string) => getAgentScriptCommand(`install ${token}`);
+  const getInstallCommand = (token: string, targetPanelUrl = commandPanelUrl) => getAgentScriptCommand(`install ${token}`, targetPanelUrl);
   const copyInstallCommand = async (token: string) => {
     try {
       // Fetch on every copy: an open dialog may outlive the first installation.
@@ -682,7 +685,8 @@ export default function AgentTokenManager({
       if (!id) throw new Error(translateText("获取安装命令失败"));
       const data = await utils.agentTokens.getInstallToken.fetch({ id }, { staleTime: 0 });
       if (!data.token || data.boundHost === undefined) throw new Error(translateText("获取安装命令失败"));
-      const command = getInstallCommand(data.token);
+      if (showScript && data.token === scriptToken) setScriptPanelUrl(data.agentPanelUrl || "");
+      const command = getInstallCommand(data.token, data.agentPanelUrl || defaultCommandPanelUrl);
       if (data.boundHost) {
         setReuseInstall({ command, hostName: data.boundHost.name, online: !!data.boundHost.isOnline });
         return;
@@ -862,7 +866,7 @@ export default function AgentTokenManager({
                 <Key className="h-8 w-8 opacity-40" />
               </div>
               <p className="text-lg font-medium">{isTextFiltered && tokenItems.length > 0 ? translateText("未找到匹配 Token") : translateText("暂无 Token")}</p>
-              <p className="text-sm mt-1 text-muted-foreground/60">
+              <p className="text-sm mt-1 text-muted-foreground/80">
                 {isTextFiltered && tokenItems.length > 0 ? translateText("调整筛选内容或清空搜索") : translateText("添加主机后会生成 Agent 安装命令")}
               </p>
               {showCreateButton && (
@@ -923,7 +927,7 @@ export default function AgentTokenManager({
               <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>{translateText("当前安装地址是本机回环地址")}</AlertTitle>
-                <AlertDescription>{translateText("Agent 作为服务运行时访问 localhost、127.0.0.1 或 ::1 可能指向 Agent 自己，面板机部署 Agent 连接自己时容易不上线。请在系统设置里配置面板公开访问地址，或用实际 IP/域名打开面板后再复制命令。")}</AlertDescription>
+                <AlertDescription>{translateText("localhost、127.0.0.1 和 ::1 指向的是 Agent 所在的机器，装到其他主机上连不上面板，装在面板本机也可能不上线。请先在系统设置里填写面板公开地址，或用实际 IP、域名打开面板后再复制命令。")}</AlertDescription>
               </Alert>
             )}
             <div className="space-y-2">
@@ -1012,6 +1016,7 @@ export default function AgentTokenManager({
 
       <Dialog open={showScript} onOpenChange={(open) => {
         setShowScript(open);
+        if (!open) setScriptPanelUrl("");
         if (!open) setScriptToken("");
       }}>
         <DialogContent className="w-[calc(100vw-2rem)] max-w-[42rem] sm:w-[calc(100vw-2rem)]">
@@ -1021,16 +1026,17 @@ export default function AgentTokenManager({
             <DialogDescription>{translateText("使用 root 执行命令。")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <InstallAddressSelector
-              options={installAddressOptions}
-              selectedId={installAddressMode}
-              onChange={setInstallAddressMode}
-            />
+            {scriptPanelUrl ? (
+              <div className="min-w-0 space-y-1 rounded-md bg-muted/35 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">{translateText("Agent 面板连接地址")}</span>
+                <div className="break-all font-mono text-xs">{scriptPanelUrl}</div>
+              </div>
+            ) : <InstallAddressSelector options={installAddressOptions} selectedId={installAddressMode} onChange={setInstallAddressMode} />}
             {panelUrlUsesLoopback && (
               <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>{translateText("当前安装地址是本机回环地址")}</AlertTitle>
-                <AlertDescription>{translateText("Agent 作为服务运行时访问 localhost、127.0.0.1 或 ::1 可能指向 Agent 自己，面板机部署 Agent 连接自己时容易不上线。请在系统设置里配置面板公开访问地址，或用实际 IP/域名打开面板后再复制命令。")}</AlertDescription>
+                <AlertDescription>{translateText("localhost、127.0.0.1 和 ::1 指向的是 Agent 所在的机器，装到其他主机上连不上面板，装在面板本机也可能不上线。请先在系统设置里填写面板公开地址，或用实际 IP、域名打开面板后再复制命令。")}</AlertDescription>
               </Alert>
             )}
             <CommandRow

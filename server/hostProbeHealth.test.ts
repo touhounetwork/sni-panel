@@ -5,9 +5,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { advanceChinaHealth, hostChinaHealthSchema, ipSwitchHookSchema, readJsonPath } from "../shared/hostChinaHealth";
+import { advanceChinaHealth, hostChinaHealthSchema, ipSwitchHookSchema, readJsonPath, ipSwitchActionLabel } from "../shared/hostChinaHealth";
 import { recordIpSwitchAgentCapability, ipSwitchAgentReady, enqueueIpSwitchAgentTask, takeIpSwitchAgentTasks, claimIpSwitchAgentTask, completeIpSwitchAgentTask } from "./agentIpSwitchTasks";
-import { requestIpSwitch, verifyIpSwitchResponse } from "./hostIpSwitchProvider";
+import { requestIpSwitch } from "./hostIpSwitchProvider";
+import { observedIpSwitchAddress, ipSwitchAddressPatch } from "./hostIpSwitchObservation";
 import { AGENT_TUNNEL_PATHS } from "./agentEncryptionMiddleware";
 
 test("health detection requires sustained failures, deduplicates samples and requires recovery successes", () => {
@@ -37,13 +38,15 @@ test("provider schema supports private HTTP GET without allowing shell scripts o
   assert.ok(AGENT_TUNNEL_PATHS.has("/api/agent/ip-switch-result"));
   const hook = ipSwitchHookSchema.parse({ url: "http://10.0.0.1/api/changeip?token=secret", successMode: "http" });
   assert.equal(hook.method, "GET");
-  for (const change of [{ url: "file:///etc/passwd" }, { headers: { Host: "localhost" } }, { headers: { "X-Key": "x\r\ny" } }, { body: "unexpected" }, { successMode: "json" }, { updateAddress: "entry" }]) {
+  for (const change of [{ url: "file:///etc/passwd" }, { headers: { Host: "localhost" } }, { headers: { "X-Key": "x\r\ny" } }, { body: "unexpected" }, { successMode: "json" }]) {
     assert.equal(ipSwitchHookSchema.safeParse({ ...hook, ...change }).success, false);
   }
   assert.equal(readJsonPath({}, "__proto__.toString"), undefined);
   assert.equal(hostChinaHealthSchema.parse({}).enabled, false);
   assert.equal(hostChinaHealthSchema.parse({}).autoSwitch, false);
-  assert.equal(hook.updateAddress, "none");
+  assert.equal(hostChinaHealthSchema.parse({}).notify, true);
+  assert.equal(hostChinaHealthSchema.parse({ notifyUserId: 99999 }).notifyUserId, null);
+  assert.equal(hostChinaHealthSchema.parse({}).cooldownSeconds, 60 * 60);
 });
 
 test("queued timeouts distinguish undelivered tasks from ambiguous delivered calls", async () => {
@@ -56,6 +59,38 @@ test("queued timeouts distinguish undelivered tasks from ambiguous delivered cal
     const [response] = await Promise.all([result, new Promise(resolve => setTimeout(resolve, 70))]);
     assert.equal(response.outcome, delivered ? "uncertain" : "not_executed");
     assert.deepEqual(takeIpSwitchAgentTasks(hostId), []);
+  }
+});
+
+test("IP switch logs distinguish queueing from dispatch without exposing credentials", async (t) => {
+  const messages: string[] = [];
+  t.mock.method(console, "info", (...args: unknown[]) => messages.push(args.join(" ")));
+  const hostId = 77704, taskId = randomUUID();
+  const request = ipSwitchHookSchema.parse({
+    url: "https://merchant.example/private-path?token=url-secret", method: "POST",
+    headers: { Authorization: "header-secret" }, body: "body-secret", successMode: "http",
+  });
+  const input = { taskId, serviceId: 1, expectedIp: "1.1.1.1", request };
+  assert.throws(() => enqueueIpSwitchAgentTask(hostId, input), /agent_unavailable/);
+  assert.equal(messages.length, 0);
+  recordIpSwitchAgentCapability(hostId, true);
+  const response = enqueueIpSwitchAgentTask(hostId, input);
+  try {
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /stage=queued/);
+    assert.deepEqual(takeIpSwitchAgentTasks(hostId + 1), []);
+    assert.equal(takeIpSwitchAgentTasks(hostId).length, 1);
+    assert.deepEqual(takeIpSwitchAgentTasks(hostId), []);
+    assert.equal(messages.length, 2);
+    assert.match(messages[1], /stage=dispatched/);
+    for (const message of messages) {
+      assert.ok(message.includes(`host=${hostId} service=1 task=${taskId}`));
+      assert.doesNotMatch(message, /merchant\.example|private-path|url-secret|header-secret|body-secret/);
+    }
+  } finally {
+    completeIpSwitchAgentTask(hostId, { taskId, outcome: "not_executed", reason: "expired" });
+    await response;
+    recordIpSwitchAgentCapability(hostId, false);
   }
 });
 
@@ -91,12 +126,24 @@ test("IP tasks are bound to one capable host, delivered and claimed at most once
   assert.equal(ipSwitchAgentReady(hostId), false);
 });
 
-test("only explicit provider success and a different public address permit panel sync", async () => {
-  const hook = ipSwitchHookSchema.parse({ url: "http://10.0.0.1/changeip", successMode: "json", successPath: "success", successValue: true, ipPath: "ip" });
-  const result = { taskId: randomUUID(), outcome: "verified" as const, reason: "ok" as const, newIp: "8.8.4.4" };
-  assert.equal(await verifyIpSwitchResponse(hook, result, "1.1.1.1"), "8.8.4.4");
-  await assert.rejects(verifyIpSwitchResponse(hook, { ...result, outcome: "accepted" }, "1.1.1.1"));
-  for (const newIp of ["1.1.1.1", "10.0.0.2", "127.0.0.1", "not-an-ip"]) await assert.rejects(verifyIpSwitchResponse(hook, { ...result, newIp }, "1.1.1.1"));
+test("only an observed same-family change confirms a switch; independent endpoints are preserved", () => {
+  const before = { ip: "1.1.1.1", ipv4: "1.1.1.1", ipv4Addresses: '["1.1.1.1","8.8.8.8"]', entryIp: "1.1.1.1", tunnelEntryIp: "tunnel.example.com", preferredIpv4: "1.1.1.1" };
+  assert.equal(observedIpSwitchAddress(before, before, "1.1.1.1"), null);
+  assert.equal(observedIpSwitchAddress(before, { ...before, ipv6: "2606:4700::1111" }, "1.1.1.1"), null);
+  assert.equal(observedIpSwitchAddress(before, { ...before, ipv4: "8.8.8.8" }, "1.1.1.1"), null, "known secondary selection is not a changed allocation");
+  assert.equal(observedIpSwitchAddress(before, { ipv4: "" }, "1.1.1.1"), null);
+  assert.deepEqual(observedIpSwitchAddress(before, { ipv4: "8.8.4.4" }, "1.1.1.1"), { oldIp: "1.1.1.1", newIp: "8.8.4.4" });
+  assert.equal(observedIpSwitchAddress(before, { ipv4: "8.8.4.4" }, "9.9.9.9"), null, "a distinct NAT entry cannot be verified by an unrelated egress IP");
+  assert.deepEqual(ipSwitchAddressPatch(before, before, "1.1.1.1", "8.8.4.4"), { entryIp: "8.8.4.4", preferredIpv4: "8.8.4.4" });
+  assert.deepEqual(ipSwitchAddressPatch(before, { ...before, entryIp: "admin.example.com" }, "1.1.1.1", "8.8.4.4"), { preferredIpv4: "8.8.4.4" });
+  assert.equal(ipSwitchHookSchema.parse({ url: "http://10.0.0.1/changeip", updateAddress: "entry_and_tunnel" }).ipPath, undefined, "provider IP fields are no longer required");
+  const v6Before = { ipv6: "2606:4700:4700::1111", entryIp: "2606:4700:4700::1111", tunnelEntryIp: "10.0.0.1" };
+  assert.deepEqual(observedIpSwitchAddress(v6Before, { ipv6: "2606:4700:4700::1001" }, v6Before.ipv6), { oldIp: v6Before.ipv6, newIp: "2606:4700:4700::1001" });
+  assert.deepEqual(ipSwitchAddressPatch(v6Before, v6Before, v6Before.ipv6, "2606:4700:4700::1001"), { entryIp: "2606:4700:4700::1001" });
+  const dualBefore = { ...before, ipv6: v6Before.ipv6, tunnelEntryIp: v6Before.ipv6 };
+  assert.deepEqual(ipSwitchAddressPatch(dualBefore, { ...dualBefore, ipv4: "8.8.4.4", ipv6: "2606:4700:4700::1001" }, "1.1.1.1", "8.8.4.4"), { entryIp: "8.8.4.4", preferredIpv4: "8.8.4.4", tunnelEntryIp: "2606:4700:4700::1001" });
+  assert.equal(ipSwitchActionLabel("succeeded", "ip_changed"), "已检测到 IP 变化并同步配置");
+  assert.equal(ipSwitchActionLabel("succeeded", "ok"), "商家接口确认成功（旧记录）", "historical response-based records must not claim Agent proof");
 });
 
 test("SQLite permissions, encrypted configuration, automatic actions, safeguards and cleanup", () => {
@@ -104,6 +151,24 @@ test("SQLite permissions, encrypted configuration, automatic actions, safeguards
   try {
     const result = spawnSync(process.execPath, ["--import", "tsx", "server/hostProbeHealth.fixture.ts"], { cwd: process.cwd(), encoding: "utf8", timeout: 90000,
       env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "test.db"), FORWARDX_LOG_DIR: path.join(directory, "logs"), JWT_SECRET: "china-health-test-secret-only-32-characters", TELEGRAM_BOT_TOKEN: "", DISCORD_BOT_TOKEN: "" } });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("observed IP changes recover across restarts and refresh every linked entry/exit without touching unrelated rules", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-ip-observation-"));
+  try {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "server/hostIpSwitchObservation.fixture.ts"], { cwd: process.cwd(), encoding: "utf8", timeout: 60000,
+      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "test.db"), FORWARDX_LOG_DIR: path.join(directory, "logs"), JWT_SECRET: "ip-observation-test-secret-only-32-characters" } });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("confirmed IP changes rearm continuous unhealthy detection while retaining cooldown, daily limits and request deduplication", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-ip-repeat-"));
+  try {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "server/hostIpSwitchRepeat.fixture.ts"], { cwd: process.cwd(), encoding: "utf8", timeout: 60000,
+      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "test.db"), FORWARDX_LOG_DIR: path.join(directory, "logs"), JWT_SECRET: "ip-repeat-test-secret-only-32-characters" } });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

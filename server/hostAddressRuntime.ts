@@ -69,13 +69,20 @@ export async function refreshAgentsAffectedByHostAddress(hostId: number, reason:
     if (entryHostId > 0) affected.add(entryHostId);
     if (exitHostId > 0) affected.add(exitHostId);
 
-    const hops = await hopRepo.getTunnelHops(Number(tunnel?.id || 0)).catch(() => []);
+    if (Number(tunnel.entryGroupId) > 0) {
+      const group = await db.getForwardGroupById(Number(tunnel.entryGroupId));
+      for (const member of (group as any)?.members || []) {
+        if ((member.isEnabled === true || Number(member.isEnabled) === 1) && Number(member.hostId) > 0) affected.add(Number(member.hostId));
+      }
+    }
+
+    const hops = await hopRepo.getTunnelHops(Number(tunnel?.id || 0));
     for (const hop of hops || []) {
       const hopHostId = Number((hop as any)?.hostId || 0);
       if (hopHostId > 0) affected.add(hopHostId);
     }
 
-    const exits = await hopRepo.getTunnelExitNodes(Number(tunnel?.id || 0)).catch(() => []);
+    const exits = await hopRepo.getTunnelExitNodes(Number(tunnel?.id || 0));
     for (const exit of exits || []) {
       const exitHostId = Number((exit as any)?.hostId || 0);
       if (exitHostId > 0) affected.add(exitHostId);
@@ -83,11 +90,11 @@ export async function refreshAgentsAffectedByHostAddress(hostId: number, reason:
   }));
 
   for (const affectedHostId of affected) {
-    pushAgentRefresh(affectedHostId, reason);
+    pushAgentRefresh(affectedHostId, reason, { urgent: true });
   }
 }
 
-export async function refreshHostAddressRuntime(hostId: number, previousHost: any, reason: string) {
+export async function refreshHostAddressRuntime(hostId: number, previousHost: any, reason: string, onDdnsFailure?: (error: unknown) => void) {
   const before = await sniAddressConfiguration(hostId, previousHost);
   await db.syncForwardChainsForHost(hostId, previousHost, { deferEntryDdns: true });
   await db.syncTunnelsForHostAddress(hostId, previousHost);
@@ -100,14 +107,27 @@ export async function refreshHostAddressRuntime(hostId: number, previousHost: an
   for (const id of changedSniHosts) pushAgentRefresh(id, reason, { urgent: true });
   // The existing evaluator controls waiting, retaining, withdrawing and
   // selecting addresses; a vendor response never grants entry qualification.
-  for (const id of new Set([hostId, ...changedSniHosts])) await db.runForwardGroupsForHostAddressChange(id, reason);
+  for (const id of new Set([hostId, ...changedSniHosts])) {
+    const ddns = db.runForwardGroupsForHostAddressChange(id, reason);
+    await (onDdnsFailure ? ddns.catch(onDdnsFailure) : ddns);
+  }
 }
 
-export async function handleHostAddressChanged(hostId: number, currentHost: any, previousHost: any, reason: string) {
+export async function handleHostAddressChanged(hostId: number, currentHost: any, previousHost: any, reason: string, options: { forceRuntimeRefresh?: boolean; retryDdnsFailures?: boolean } = {}) {
+  // Host DNS has its own per-host deduplication and retry scheduler. Do not
+  // block forwarding recovery on a slow DNS provider.
   scheduleHostDdnsUpdate(currentHost, reason);
-  if (hostUsesAutomaticIngress(previousHost)) {
-    await refreshHostAddressRuntime(hostId, previousHost, reason);
+  // Group DDNS is always evaluated by runForwardGroupsForHostAddressChange,
+  // which keeps the local entry-health rules (ADR-0006/0008). A forced refresh
+  // (confirmed IP switch) only republishes the runtime first; it never switches
+  // groups by itself. A failed DNS request must not block the runtime update.
+  const ddnsFailure = (error: unknown) => {
+    console.warn(`[HostAddress] Forward group DDNS refresh failed host=${hostId}: ${error instanceof Error ? error.message : String(error)}`);
+    if (options.retryDdnsFailures) throw error;
+  };
+  if (options.forceRuntimeRefresh || hostUsesAutomaticIngress(previousHost)) {
+    await refreshHostAddressRuntime(hostId, previousHost, reason, ddnsFailure);
   } else {
-    await db.runForwardGroupsForHostAddressChange(hostId, reason);
+    await db.runForwardGroupsForHostAddressChange(hostId, reason).catch(ddnsFailure);
   }
 }

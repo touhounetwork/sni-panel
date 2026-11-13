@@ -10,7 +10,7 @@ assert.ok(listing.every(name => !name.startsWith('/') && !name.split('/').includ
 fs.rmSync(context, { recursive: true, force: true }); fs.mkdirSync(context, { recursive: true });
 execFileSync('tar', ['-xzf', bundle, '-C', context]);
 assert.equal(JSON.parse(fs.readFileSync(`${context}/package.json`)).version, version);
-for (const name of ['forwardx-agent-linux-amd64', 'forwardx-fxp-linux-amd64', 'forwardx-runtime-linux-amd64', 'THIRD_PARTY_NOTICES.md', 'SHA256SUMS']) {
+for (const name of ['forwardx-agent-linux-amd64', 'forwardx-fxp-linux-amd64', 'forwardx-runtime-linux-amd64', 'RUNTIME_BUILD.txt', 'RUNTIME_LICENSE.txt', 'THIRD_PARTY_NOTICES.md', 'SHA256SUMS']) {
   assert.equal(digest(fs.readFileSync(`${context}/dist/agent/${name}`)), digest(fs.readFileSync(`.release/candidate/${name}`)), `Bundled ${name} differs from standalone download`);
 }
 execFileSync('sha256sum', ['-c', 'SHA256SUMS'], { cwd: `${context}/dist/agent`, stdio: 'inherit' });

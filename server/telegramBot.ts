@@ -10,11 +10,13 @@ import { createDirectForwardRuleForActor, deleteForwardRuleForActor, toggleForwa
 import { ENV } from "./env";
 import { ACCOUNT_DISABLED_ERR_MSG } from "../shared/const";
 import { pushAgentRefresh, pushAgentUpgrade } from "./agentEvents";
+import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { pushTunnelEndpointRefresh, refreshUserForwardEndpoints } from "./routers/helpers";
 import { addMonthsClamped } from "./repositories/repositoryUtils";
 import { clearMobileTelegramLoginChallenge, hasMobileTelegramLoginChallenge } from "./telegramMobileLogin";
 import { createTelegramWebAppLoginChallenge } from "./telegramWebAppLogin";
 import { withTelegramApiTimeout } from "./telegramApiTimeout";
+import { telegramApiFetch } from "./telegramApiTransport";
 import { formatForwardRuleProtocol } from "../shared/forwardTypes";
 import { isAgentVersionAtLeast } from "./agentRouteUtils";
 import { APP_VERSION, AGENT_VERSION } from "../shared/versions";
@@ -281,6 +283,7 @@ export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "redeem", description: "兑换余额或套餐兑换码" },
   { command: "bind", description: "使用绑定码绑定后台账号" },
   { command: "login", description: "生成网页登录链接" },
+  { command: "resetpassword", description: "找回当前绑定账号的密码" },
   { command: "webapp", description: "在 Telegram 内打开面板" },
   { command: "unbind", description: "解除机器人绑定" },
   { command: "users", description: "管理员用户管理" },
@@ -675,7 +678,7 @@ async function telegramApi<T = any>(method: string, body?: Record<string, unknow
   if (!settings.token) throw new Error("Telegram Bot Token is not configured");
   if (!settings.enabled && method !== "getMe" && method !== "setMyCommands") throw new Error("Telegram notification channel is inactive");
   return withTelegramApiTimeout(method, async (signal) => {
-    const resp = await fetch(`https://api.telegram.org/bot${settings.token}/${method}`, {
+    const resp = await telegramApiFetch(`https://api.telegram.org/bot${settings.token}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
@@ -836,6 +839,7 @@ function helpText(bound: boolean, isAdmin = false) {
     "/ask 问题 - 用自然语言查询面板信息",
     "/redeem 兑换码 - 兑换余额或套餐",
     "/login - 生成网页一次性登录链接",
+    ...(!isDiscordBotContext() ? ["/resetpassword - 通过已绑定 Telegram 找回密码"] : []),
     isDiscordBotContext() ? "/webapp - 获取一次性网页登录链接" : "/webapp - 在 Telegram 内打开面板",
     "/enable 规则ID - 启用规则",
     "/disable 规则ID - 停用规则",
@@ -5070,8 +5074,6 @@ async function executePendingUpdateAction(pending: PendingUpdateAction) {
   if (hostIds.length === 0) {
     return "没有可执行更新的 Agent 主机，请重新检查。";
   }
-  const configuredPanelUrl = String((await db.getSetting("panelPublicUrl")) || "").trim();
-  const panelUrl = /^https?:\/\//i.test(configuredPanelUrl) ? configuredPanelUrl.replace(/\/+$/, "") : "";
   let requested = 0;
   let pushed = 0;
   let skippedLatest = 0;
@@ -5092,7 +5094,7 @@ async function executePendingUpdateAction(pending: PendingUpdateAction) {
     try {
       await db.requestHostAgentUpgrade(hostId, targetVersion);
       requested += 1;
-      if (pushAgentUpgrade(hostId, targetVersion, panelUrl)) pushed += 1;
+      if (pushAgentUpgrade(hostId, targetVersion, await resolveAgentAdvertisedPanelUrl(host))) pushed += 1;
     } catch {
       failed += 1;
       failedHostIds.push(hostId);
@@ -5190,6 +5192,18 @@ async function handleMessage(message: TelegramMessage) {
   }
   if (command === "/redeem") return handleRedeem(message, user, args.join(" "));
   if (command === "/login") return handleLogin(message, user);
+  if (command === "/resetpassword") {
+    if (isDiscordBotContext()) return sendMessage(message.chat.id, "请通过面板登录页，使用已验证邮箱或已绑定 Telegram 找回密码。");
+    const { passwordRecovery } = await import("./passwordRecovery");
+    try {
+      const result = passwordRecovery.request(user.username, "telegram", `telegram:${identity.telegramId}`);
+      // The reset link is delivered only to the bound private chat, never to
+      // this message's chat (which could be a group).
+      return sendMessage(message.chat.id, result.message);
+    } catch {
+      return sendMessage(message.chat.id, "申请过于频繁，请稍后再试或联系管理员");
+    }
+  }
   if (command === "/webapp") return handleWebApp(message, user);
   if (command === "/enable") return handleRuleToggle(message, user, args[0], true);
   if (command === "/disable") return handleRuleToggle(message, user, args[0], false);
@@ -5734,6 +5748,17 @@ async function processTelegramUpdate(update: TelegramUpdate) {
   const chat = update.message?.chat || update.callback_query?.message?.chat;
   if (!chat || chat.type !== "private") return;
   if (!isDiscordBotContext() && !(await getTelegramSettings()).enabled) return;
+  // Replies carry one-time login links, password resets and account data, and
+  // they go to the chat the update came from. In a group every member would
+  // read them, so the Telegram bot only talks in private chats, the same rule
+  // the Discord gateway applies to guild channels.
+  const chatType = update.message?.chat.type || update.callback_query?.message?.chat.type;
+  if (!isDiscordBotContext() && chatType && chatType !== "private") {
+    const notice = "为保护账号安全，请在与机器人的私聊中使用指令。";
+    if (update.callback_query) await answerCallback(update.callback_query.id, notice).catch(() => undefined);
+    else if (update.message?.text?.trim().startsWith("/")) await sendMessage(update.message.chat.id, notice).catch(() => undefined);
+    return;
+  }
   return withBotLocale(isDiscordBotContext() ? "discord" : "telegram", update.message?.from || update.callback_query?.from, async () => {
   try {
     const chatId = update.message?.chat.id || update.callback_query?.message?.chat.id || update.update_id;

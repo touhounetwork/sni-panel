@@ -1,5 +1,6 @@
 import { LatencyChartDialogHeader } from "@/components/LatencyChartDialogHeader";
 import { t as translateText } from "@/i18n";
+import { LinkSpeedTestButton } from "@/components/LinkSpeedTest";
 import { useMotionEnabled } from "@/components/MotionPolicy";
 import { manualProbeDeadline } from "@/lib/manualProbe";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -61,7 +62,7 @@ import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimistic
 import { countryFeatureHasCode, normalizeCountryCode, type CountryFeatureLike } from "@/lib/countryFeatures";
 import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks, isLatencySeriesCacheFresh, normalizeLatencyProbeCounts } from "@/lib/latencyChart";
 import { useUrlTab } from "@/hooks/useUrlTab";
-import { addHostNodeMeta, hostAddressCandidates, hostDisplayName } from "@/lib/linkTestNodeMeta";
+import { addHostNodeMeta, addTunnelHostNodeMeta, hostAddressCandidates, hostDisplayName } from "@/lib/linkTestNodeMeta";
 import { buildLinkAvailabilityIndex, type LinkAvailabilityResult } from "@/lib/linkAvailability";
 import { MAX_NGINX_PEM_FILES, MAX_NGINX_PEM_UPLOAD_BYTES, parseNginxPemFiles } from "@/lib/nginxPemFiles";
 import { pollingInterval } from "@/lib/polling";
@@ -1433,7 +1434,7 @@ function TunnelLatencyDialog({
                                     {timeout ? translateText("超时") : `${Number(item[meta.rawKey] || 0)}ms`}
                                   </span>
                                   {Number(item[`${meta.key}ProbeCount`]) > 1 && Number(item[`${meta.key}ProbeSuccesses`]) < Number(item[`${meta.key}ProbeCount`]) ? (
-                                    <span className="block text-[10px] font-normal text-muted-foreground">{translateText("路径健康样本失败 ")}{Number(item[`${meta.key}ProbeCount`]) - Number(item[`${meta.key}ProbeSuccesses`])}/{Number(item[`${meta.key}ProbeCount`])}{translateText("（非独立探测次数）")}</span>
+                                    <span className="block text-[11px] font-normal text-muted-foreground">{translateText("路径健康样本失败 ")}{Number(item[`${meta.key}ProbeCount`]) - Number(item[`${meta.key}ProbeSuccesses`])}/{Number(item[`${meta.key}ProbeCount`])}{translateText("（非独立探测次数）")}</span>
                                   ) : null}
                                 </span>
                               </div>
@@ -1585,20 +1586,9 @@ function TunnelSelfTestDialog({
   const linkTestNodeData = useMemo(() => {
     const meta: Record<string, any> = {};
     const nodeTooltips: Record<string, ReactNode> = {};
-    const fullHostById = new Map<number, any>((hosts || []).map((host: any) => [Number(host.id), host]));
-    const tunnelHostById = new Map<number, any>();
-    [
-      ...(tunnel?.hopHosts || []),
-      tunnel?.entryHost,
-      tunnel?.exitHost,
-      ...(tunnel?.loadBalanceExitHosts || []),
-      ...(Array.isArray(tunnel?.loadBalanceExits) ? tunnel.loadBalanceExits.map((exit: any) => exit?.host) : []),
-    ].forEach((host: any) => {
-      const id = Number(host?.id || 0);
-      if (id > 0) tunnelHostById.set(id, host);
-    });
+    const hostById = addTunnelHostNodeMeta(meta, tunnel, hosts);
     const hopIds = getTunnelHopIds(tunnel);
-    const hostForId = (hostId: number) => fullHostById.get(Number(hostId)) || tunnelHostById.get(Number(hostId));
+    const hostForId = (hostId: number) => hostById.get(Number(hostId));
     const entryGroup = (entryGroups || []).find((group: any) => Number(group?.id || 0) === Number(tunnel?.entryGroupId || 0));
     const entryGroupMembers = enabledHostGroupMembers(entryGroup);
     const entryGroupMemberByHostId = new Map<number, any>();
@@ -2231,6 +2221,7 @@ function tunnelMatchesLinkSearch(
 
 function TunnelsContent() {
   const { user, loading: authLoading } = useAuth();
+  const isAdmin = user?.role === "admin";
   const utils = trpc.useUtils();
   // The compact options query is preferred for the editors. Keep the older
   // list query as a same-scope fallback: an options failure must not make the
@@ -3432,7 +3423,7 @@ function TunnelsContent() {
             <div className="text-xs text-muted-foreground">PROXY Protocol</div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
               {advancedConfigured ? translateText("已配置") : translateText("可选")}
             </Badge>
             <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${chainAdvancedOpen ? "rotate-90" : ""}`} />
@@ -3734,7 +3725,7 @@ function TunnelsContent() {
             <div className="text-xs text-muted-foreground">{translateText("PROXY Protocol、传输优化")}</div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
               {advancedConfigured ? translateText("已配置") : translateText("可选")}
             </Badge>
             <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${tunnelAdvancedOpen ? "rotate-90" : ""}`} />
@@ -3824,7 +3815,8 @@ function TunnelsContent() {
     handleChainViewModeChange("globe");
     setChainEditRequest({ id: groupId, requestKey: Date.now() });
   };
-  const canCreateTunnel = !!hosts?.length
+  // Tunnels are created, edited and deleted by administrators only.
+  const canCreateTunnel = isAdmin && !!hosts?.length
     && hosts.length >= 2
     && (forwardProtocolSettings.forwardx !== false || enabledGostTunnelModes.length > 0 || enabledNginxTunnelModes.length > 0);
   const canCreatePort = !!hosts?.length && allowedForwardTypes.some((type) => forwardProtocolSettings[type] !== false);
@@ -3840,7 +3832,9 @@ function TunnelsContent() {
         : activeSectionCreatesGroup
           ? canCreateGroup
           : false;
-  const createDisabledTitle = hostsQueryFailed
+  const createDisabledTitle = !isAdmin && activeSection === "tunnels"
+    ? translateText("仅管理员可以新建隧道")
+    : hostsQueryFailed
     ? translateText("主机列表加载失败，请重试后再创建")
     : hostsQueryLoading
       ? translateText("正在加载主机列表")
@@ -3901,12 +3895,12 @@ function TunnelsContent() {
               isTimeout={item.isTimeout}
               icon="none"
               timeoutText={translateText("超时")}
-              className={compact ? "shrink-0 text-[10px]" : "shrink-0"}
+              className={compact ? "shrink-0 text-[11px]" : "shrink-0"}
             />
           </div>
         ))}
         {hiddenCount > 0 && (
-          <div className="text-[10px] leading-none text-muted-foreground">{translateText("还有 ")}{hiddenCount}{translateText(" 条延迟明细")}</div>
+          <div className="text-[11px] leading-none text-muted-foreground">{translateText("还有 ")}{hiddenCount}{translateText(" 条延迟明细")}</div>
         )}
       </div>
     );
@@ -3979,12 +3973,12 @@ function TunnelsContent() {
         </div>
       </div>
 
-      <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div className="hidden items-center gap-2 sm:flex">
           <Filter className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">{translateText("筛选：")}</span>
         </div>
-        <div className="relative w-full sm:w-[260px] lg:w-[320px]">
+        <div className="relative min-w-0 flex-1 sm:w-[260px] sm:flex-none lg:w-[320px]">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={linkSearchQuery}
@@ -4003,7 +3997,7 @@ function TunnelsContent() {
             </button>
           ) : null}
         </div>
-        <span className="text-xs tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
         </span>
       </div>
@@ -4094,17 +4088,21 @@ function TunnelsContent() {
                     <div className="action-card-footer flex justify-end gap-1 border-t border-border/40 pt-2">
                       {supported && (
                         <>
+                          <LinkSpeedTestButton resourceType="tunnel" resourceId={tunnel.id} name={tunnel.name} />
                           <Button variant="ghost" size="icon" className="h-8 w-8" title={translateText("查看延迟")} onClick={() => setLatencyTunnel({ id: tunnel.id, name: tunnel.name })}>
                             <Activity className="h-3.5 w-3.5" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-8 w-8" title={translateText("测试延迟")} onClick={() => setTestTunnel({ id: tunnel.id, name: tunnel.name })}>
                             <Stethoscope className="h-3.5 w-3.5" />
                           </Button>
+                          {isAdmin && (
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(tunnel)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
+                          )}
                         </>
                       )}
+                      {isAdmin && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -4114,6 +4112,7 @@ function TunnelsContent() {
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
+                      )}
                     </div>
                     </CardContent>
                   </Card>
@@ -4182,17 +4181,21 @@ function TunnelsContent() {
                     <div className="action-card-footer flex justify-end gap-1 border-t border-border/40 pt-2">
                       {supported && (
                         <>
+                          <LinkSpeedTestButton resourceType="tunnel" resourceId={tunnel.id} name={tunnel.name} />
                           <Button variant="ghost" size="icon" className="h-8 w-8" title={translateText("查看延迟")} onClick={() => setLatencyTunnel({ id: tunnel.id, name: tunnel.name })}>
                             <Activity className="h-3.5 w-3.5" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-8 w-8" title={translateText("测试延迟")} onClick={() => setTestTunnel({ id: tunnel.id, name: tunnel.name })}>
                             <Stethoscope className="h-3.5 w-3.5" />
                           </Button>
+                          {isAdmin && (
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(tunnel)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
+                          )}
                         </>
                       )}
+                      {isAdmin && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -4202,6 +4205,7 @@ function TunnelsContent() {
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
+                      )}
                     </div>
                     </CardContent>
                   </Card>
@@ -4273,7 +4277,7 @@ function TunnelsContent() {
                       </TableCell>
                       <TableCell className="hidden py-3 md:table-cell">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className="text-[11px]">
                             {getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion)}
                           </Badge>
                         </div>
@@ -4293,6 +4297,7 @@ function TunnelsContent() {
                         <div className="flex items-center justify-end gap-1">
                           {supported && (
                             <>
+                              <LinkSpeedTestButton resourceType="tunnel" resourceId={tunnel.id} name={tunnel.name} />
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -4311,11 +4316,14 @@ function TunnelsContent() {
                               >
                                 <Stethoscope className="h-3.5 w-3.5" />
                               </Button>
+                              {isAdmin && (
                               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(tunnel)}>
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
+                              )}
                             </>
                           )}
+                          {isAdmin && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -4325,6 +4333,7 @@ function TunnelsContent() {
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -4350,7 +4359,7 @@ function TunnelsContent() {
                 <Network className="h-8 w-8 opacity-40" />
               </div>
               <p className="text-lg font-medium">{translateText("暂无隧道")}</p>
-              <p className="mt-1 text-sm text-muted-foreground/60">{translateText("选择两台 Agent 创建第一条隧道")}</p>
+              <p className="mt-1 text-sm text-muted-foreground/80">{translateText("选择两台 Agent 创建第一条隧道")}</p>
             </div>
           </CardContent>
         </Card>

@@ -28,9 +28,11 @@ import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tun
 import { tunnelMultiEntryProbeMessage } from "./tunnelMultiEntryProbeMessage";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
+import { claimLinkSpeedTask, reportLinkSpeedTask } from "./linkSpeedTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
+import { planTrafficBytes } from "../shared/planTraffic";
 import { mapWithConcurrency } from "./asyncPool";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
 import { trafficBillingUserLockKey, withKeyedTaskLock } from "./keyedTaskLock";
@@ -603,6 +605,20 @@ agentRouter.post("/api/agent/ip-switch-result", async (req: Request, res: Respon
   } catch { res.status(500).json({ error: "IP switch result failed" }); }
 });
 
+agentRouter.post("/api/agent/link-speed-claim", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) { res.status(401).json({ error: "Invalid token" }); return; }
+    res.json({ allowed: claimLinkSpeedTask(host.id, String(req.body?.taskId || ""), String(req.body?.jobId || "")) });
+  } catch { res.status(500).json({ error: "Speed test claim failed" }); }
+});
+agentRouter.post("/api/agent/link-speed-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) { res.status(401).json({ error: "Invalid token" }); return; }
+    res.json({ success: reportLinkSpeedTask(host.id, req.body?.result) });
+  } catch { res.status(500).json({ error: "Speed test report failed" }); }
+});
 agentRouter.post("/api/agent/iperf3-result", async (req: Request, res: Response) => {
   try {
     const host = await getAgentHostIdentityFromRequest(req);
@@ -818,7 +834,6 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
 
     const quotaTrafficByUser = new Map<number, number>();
     const trafficBatch: db.TrafficStatBatchItem[] = [];
-    const runningRuleIds = new Set<number>();
     const billingEntries: Array<{
       rule: any;
       ruleBytes: number;
@@ -860,6 +875,9 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
         .map((context) => context.rule)
         .filter((rule) => rulesWithBytes.has(Number(rule.id))))
       : new Map();
+    const planTrafficModes = await db.getPlanTrafficModesForRules((trafficContexts as any[])
+      .map(context => context.rule)
+      .filter(rule => rulesWithBytes.has(Number(rule.id)) && !billingResourcesByRuleId.get(Number(rule.id))?.config));
     for (const stat of stats) {
       const bytesIn = Number(stat.bytesIn) || 0;
       const bytesOut = Number(stat.bytesOut) || 0;
@@ -913,11 +931,6 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       acceptedBytesOut += bytesOut;
       const ruleBytes = bytesIn + bytesOut;
       if (ruleBytes > 0) {
-        // A previous successful SNI table can still send traffic while a new
-        // table is waiting to apply. Traffic confirms usage, not readiness.
-        if (!(rule as any).isRunning && !(String(rule.sni || "").trim() && String(group?.groupMode) === "failover")) {
-          runningRuleIds.add(Number(rule.id));
-        }
         logTrafficReportSample(
           `rule:${host.id}:${rule.id}`,
           `[Traffic] host=${host.id} rule=${rule.id}`,
@@ -929,7 +942,7 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
         if (billingResource?.config) {
           billingEntries.push({ rule, ruleBytes, billingResource });
         } else {
-          const quotaBytes = applyTrafficMultiplier(ruleBytes, quotaTrafficMultiplierForRule(rule, tunnel, group));
+          const quotaBytes = applyTrafficMultiplier(planTrafficBytes(planTrafficModes.get(Number(rule.id)), bytesIn, bytesOut), quotaTrafficMultiplierForRule(rule, tunnel, group));
           quotaTrafficByUser.set(rule.userId, (quotaTrafficByUser.get(rule.userId) || 0) + quotaBytes);
         }
       }
@@ -939,7 +952,9 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
     await recordOperationsTraffic(trafficBatch, contextsByRuleId, host);
     if (analyticsEnabled && trafficReportId) await recordOperationsSources(host, sourceSamples, contextsByRuleId, entryHostsByTunnelId, req.body?.sourceStatus, req.body?.sourceSampledAt);
     await recordRuleQuotaTraffic(trafficBatch, contextsByRuleId);
-    await db.markForwardRulesRunning(Array.from(runningRuleIds));
+    // Traffic can come from an old connection or a buffered report. It does
+    // not acknowledge the desired configuration; only runtime/status
+    // reconciliation may mark a pending rule as running.
 
     for (const { rule, ruleBytes, billingResource } of billingEntries) {
       strictTrafficAccounting = true;

@@ -159,6 +159,36 @@ test("card quotas use an accessible popover icon without inline details or extra
   assert.doesNotMatch(cards, /<RuleUsageSummary[^>]*get\(rule.id\)\} \/>/);
 });
 
+test("compact rule cards keep addresses on one line with complete hover text and unchanged copying", () => {
+  const source = readFileSync("client/src/pages/Rules.tsx", "utf8");
+  const transfer = source.slice(source.indexOf("const renderTransfer ="), source.indexOf("const renderTableTransferEntry ="));
+  assert.match(transfer, /const inlineEndpoints = effectiveRuleCardSize === "compact"/);
+  assert.match(transfer, /const panelClass = inlineEndpoints\s*\? "pearl-readout flex min-w-0 items-start/);
+  const styleDefinitions = transfer.slice(transfer.indexOf("    const labelClass ="), transfer.indexOf("    return ("));
+  const resolveStyle = new Function("cn", "inlineEndpoints", "compact", `${styleDefinitions}\nreturn { labelClass, valueClass };`);
+  const cn = (...classes: string[]) => classes.join(" ");
+  const inline = resolveStyle(cn, true, true);
+  assert.match(inline.labelClass, /shrink-0 whitespace-nowrap/);
+  assert.match(inline.valueClass, /min-w-0.*flex-1 truncate/);
+  assert.match(inline.valueClass, /text-\[11px\]/);
+  for (const compact of [true, false]) {
+    const stacked = resolveStyle(cn, false, compact);
+    assert.match(stacked.labelClass, /mb-1 flex items-center gap-1/);
+    assert.match(stacked.valueClass, /min-w-0.*break-all/);
+    assert.match(stacked.valueClass, compact ? /text-\[11px\]/ : /text-xs/);
+  }
+  assert.equal((transfer.match(/<div className=\{panelClass\}>/g) || []).length, 2);
+  for (const label of ["入口", "出口"]) {
+    assert.ok(transfer.includes(`<div className={labelClass}>{translateText("${label}")}</div>`));
+  }
+  assert.doesNotMatch(transfer, /line-clamp|RuleEntryAddresses/);
+  assert.match(transfer, /title=\{inlineEndpoints \? entry.text : undefined\}/);
+  assert.match(transfer, /onClick=\{\(\) => entry\.copyable && copyEntryAddress\(rule, entry\.value\)\}/);
+  assert.match(transfer, /disabled=\{!entry\.copyable\}/);
+  assert.match(transfer, /title=\{targetAddress\}/);
+  assert.match(transfer, /inlineEndpoints \? "py-0\.5" : "bg-muted\/35 py-1"/);
+});
+
 test("table headers, cells and grouped row spans share the same configured column list", () => {
   const source = readFileSync("client/src/pages/Rules.tsx", "utf8");
   const frame = readFileSync("client/src/components/rules/RuleTableFrame.tsx", "utf8");

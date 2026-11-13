@@ -47,7 +47,21 @@ export function getEntryAddressFamily(value: unknown): EntryAddressFamily {
   return "unknown";
 }
 
-export function filterRuleEntryAddressesForDisplay<T extends RuleEntryAddress>(entries: readonly T[]): T[] {
+/** Add alternatives without changing the preferred address or exposing non-entry hosts. */
+export function appendRuleEntryIpv6Addresses<T extends RuleEntryAddress>(entries: readonly T[], candidates: readonly T[]): T[] {
+  const rows = entries.slice();
+  const seen = new Set(rows.map((entry) => entry.value.trim()));
+  for (const entry of candidates) {
+    const value = entry.value.trim();
+    if (getEntryAddressFamily(value) !== "ipv6" || seen.has(value)) continue;
+    seen.add(value);
+    rows.push({ ...entry, value });
+  }
+  return rows;
+}
+
+export function filterRuleEntryAddressesForDisplay<T extends RuleEntryAddress>(entries: readonly T[], includeIpv6 = false): T[] {
+  if (includeIpv6) return entries.slice();
   const hasIpv4OrHostname = entries.some((entry) => {
     const family = getEntryAddressFamily(entry.value);
     return family === "ipv4" || family === "hostname";

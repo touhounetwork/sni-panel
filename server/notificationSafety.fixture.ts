@@ -141,7 +141,13 @@ async function telegramLifecycle(userId: number) {
     }
     return Response.json({ ok: true, result: method === "getMe" ? { id: 999, username: "test_bot" } : { message_id: 1 } });
   }) as typeof fetch;
-  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  // Telegram requests go through a lazily loaded undici pool (upstream 296):
+  // wait for the first poll to appear, then let any duplicate surface too.
+  const settle = async (minimumPolls = 1) => {
+    const deadline = Date.now() + 2000;
+    while (polls.length < minimumPolls && Date.now() < deadline) await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  };
   try {
     await Promise.all([startTelegramBot(), startTelegramBot()]);
     await settle();

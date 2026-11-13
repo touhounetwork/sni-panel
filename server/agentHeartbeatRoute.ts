@@ -29,13 +29,14 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
-import { portAccessLimitAction, portAccessLimitSpecs } from "./portAccessLimits";
+import { ipAccessLimitAction, ipAccessLimitSpecs } from "./ipAccessLimits";
 import { clearTunnelRuntimeStatusForHost, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
+import { hasQueuedLinkSpeedTasks, takeLinkSpeedTasks, recordLinkSpeedCapability } from "./linkSpeedTasks";
 import { recordIpSwitchAgentCapability, hasQueuedIpSwitchAgentTasks, takeIpSwitchAgentTasks } from "./agentIpSwitchTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
@@ -89,6 +90,7 @@ import {
   writeManagedServiceCmd,
 } from "./agentActionCommands";
 import { handleHostAddressChanged, hostIngressAddress, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
+import { observeIpSwitchAddress } from "./hostIpSwitchObservation";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
 import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
@@ -525,6 +527,7 @@ function stableActionSignature(actions: any[]) {
     removalToken: action?.removalToken || "",
     managedConfigs: action?.managedConfigs || [],
     portAccessLimits: action?.portAccessLimits || [],
+    ipAccessLimits: action?.ipAccessLimits || [],
     rollbackCommands: action?.rollbackCommands || [],
     preCommands: action?.preCommands || [],
     postCommands: action?.postCommands || [],
@@ -1493,7 +1496,7 @@ agentRouter.post("/api/agent/presence", async (req: Request, res: Response) => {
         });
     }
     const panelMigration = await getPanelMigrationAgentDirective(Number(host.id));
-    res.json(buildPresenceAgentHeartbeatResponse({ panelMigration }));
+    res.json(buildPresenceAgentHeartbeatResponse({ panelMigration, metricsWatching: isHostMetricsWatching(host.id) }));
   } catch (error) {
     if (respondAgentDatabaseBusy(error, res)) return;
     console.error("[Agent Presence] Error:", error);
@@ -1648,6 +1651,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           presenceSupported: true,
           reconciliationCoalesced: true,
           panelMigration,
+          panelUrl: await resolveAgentAdvertisedPanelUrl(host),
         });
         return;
       }
@@ -1855,7 +1859,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         geoUpdatedAt: null,
       } : {}),
     } as any);
-    Object.assign(host as any, reportedAddress);
+    Object.assign(host as any, reportedAddress, { lastHeartbeat: new Date() });
     if (agentVersionChanged) {
       invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
       appendPanelLog(
@@ -1888,7 +1892,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     }
     if (addressChanged) {
-      await handleHostAddressChanged(host.id, host, previousHost, "agent-address-changed");
+      if (!await observeIpSwitchAddress(host)) await handleHostAddressChanged(host.id, host, previousHost, "agent-address-changed");
     } else if (["ipv4Addresses", "ipv6Addresses"].some(key => (reportedAddress as any)[key] !== (previousHost as any)[key])) {
       scheduleHostDdnsUpdate(host, "agent-address-inventory-changed");
     }
@@ -1941,7 +1945,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     const trafficShutdownCheck = req.body?.trafficShutdownSupported === true && host.trafficShutdownEnabled && !host.trafficShutdownTriggered;
     if (busyHeartbeat) {
-      const panelUrl = await resolveAgentAdvertisedPanelUrl();
+      const panelUrl = await resolveAgentAdvertisedPanelUrl(host);
       const metricsWatching = isHostMetricsWatching(host.id);
       logAgentHeartbeatSummary({
         hostId: logHostId,
@@ -1968,6 +1972,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return;
     }
 
+    recordLinkSpeedCapability(host.id, req.body?.linkSpeedSupported === true);
     const reportedPluginInventoryForFastPath = getAgentPluginInventory(host.id);
     const sourceCleanupAction = sniSourceCleanupAction(Number(host.id), JSON.stringify([
       agentBootId, agentProcessId, agentProcessStartedAtSeconds, effectiveAgentVersion,
@@ -1982,6 +1987,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
+        || hasQueuedLinkSpeedTasks(host.id)
         || hasQueuedIpSwitchAgentTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id),
       recoveryTriggered,
@@ -2029,7 +2035,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         pluginTasks: [],
         agentUpgrade: null,
         trafficShutdownCheck,
-        panelUrl: stablePlan.panelUrl,
+        panelUrl: await resolveAgentAdvertisedPanelUrl(host),
         forceTcping: false,
         nextInterval: metricsWatching ? 3 : stablePlan.idleNextInterval,
         requestLocalState: false,
@@ -3126,21 +3132,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     };
     const buildAccessLimitCmds = (port: number, scope: string, limits: { maxConnections?: number; maxIPs?: number }): string[] => {
       const maxConnections = Math.max(0, Number(limits.maxConnections || 0));
-      const maxIPs = Math.max(0, Number(limits.maxIPs || 0));
-      if (maxConnections <= 0 && maxIPs <= 0) return buildAccessLimitCleanupCmds(port, scope);
+      // Distinct-IP admission is coordinated separately on the entry Agent.
+      // Never translate the new quota into connlimit's per-IP connection cap.
+      if (maxConnections <= 0) return buildAccessLimitCleanupCmds(port, scope);
       const chain = accessScopeName(scope);
       const cmds = buildAccessLimitCleanupCmds(port, scope);
       for (const binary of accessLimitBinaries) {
-        const mask = binary === "ip6tables" ? 128 : 32;
         cmds.push(
           accessLimitOptional(binary, `${binary} -N ${chain}`),
           accessLimitOptional(binary, `${binary} -F ${chain}`),
         );
         if (maxConnections > 0) {
           cmds.push(accessLimitCommand(binary, `${binary} -A ${chain} -p tcp -m connlimit --connlimit-above ${maxConnections} --connlimit-mask 0 -j REJECT --reject-with tcp-reset`));
-        }
-        if (maxIPs > 0) {
-          cmds.push(accessLimitCommand(binary, `${binary} -A ${chain} -p tcp -m connlimit --connlimit-above ${maxIPs} --connlimit-mask ${mask} -j REJECT --reject-with tcp-reset`));
         }
         cmds.push(
           accessLimitCommand(binary, `${binary} -A ${chain} -j RETURN`),
@@ -6119,6 +6122,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (!domainApplied && runtimeBool(rule.isRunning)) await settleStoppedRule(rule);
       }
     }
+    const recoverableRuntimeRules: any[] = [];
     for (const rule of rules) {
       if (sniRuntimeHandledRuleIds.has(Number((rule as any).id || 0))) continue;
       const ruleTunnel = (rule as any).tunnelId ? tunnelById.get((rule as any).tunnelId) as any : null;
@@ -6139,6 +6143,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           if (removeAction) actions.push(removeAction);
         }
         continue;
+      }
+      const expectedRuleForwardType = useRuleGuard
+        ? "guard"
+        : rule.forwardType === "gost" && ruleTunnel
+        ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
+        : rule.forwardType;
+      // Use the same typed identity/readiness check used for repair. Preserve
+      // normal desired-config generation: same endpoints do not prove that
+      // Proxy Protocol, limits or service configuration are already current.
+      // SNI rules are confirmed by their complete splitter table, never by a listener alone.
+      if (hasReportedRuntimeState && runtimeBool(rule.isEnabled) && !runtimeBool(rule.pendingDelete) && !sniRuntimeForRule(rule)
+        && !runtimeBool(rule.isRunning) && !rule.tunnelId && Number(rule.sourcePort) > 0
+        && localRuleMatches(rule, expectedRuleForwardType, Number(rule.sourcePort))) {
+        recoverableRuntimeRules.push(rule);
       }
       // 收集所有已运行的规则映射（无论是否有 action 下发）
       if (runtimeBool(rule.isEnabled) && runtimeBool(rule.isRunning)) {
@@ -6208,11 +6226,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const shouldRefreshForwardXEntryRule = isForwardXEntryRule && shouldRefreshTunnelEntryRule;
       const shouldRefreshGuardBackend = shouldReconcileProtocolGuardBackend(useRuleGuard, rule.forwardType);
       const expectedRulePort = Number(rule.sourcePort) || 0;
-      const expectedRuleForwardType = useRuleGuard
-        ? "guard"
-        : rule.forwardType === "gost" && ruleTunnel
-        ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
-        : rule.forwardType;
       if (runtimeBool(rule.isEnabled) && expectedRulePort > 0) {
         expectedRulePorts.add(runtimePortProtocolKey(expectedRulePort, rule.protocol));
         expectedRuleIdentityKeys.add(ruleRuntimeIdentityKey(rule.id, expectedRulePort, rule.protocol));
@@ -6226,9 +6239,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         runtimeDriftedRuleIds.push(Number(rule.id));
         rule.isRunning = false;
         if (shouldLogAgentRuntimeDrift(Number(host.id), Number(rule.id))) {
+          const local = findLocalRuleState(expectedRulePort, rule.protocol, Number(rule.id));
           appendPanelLog(
             "warn",
-            `[AgentRecovery] local listener missing; rule marked for reapply host=${host.id} name=${String(host.name || "-")} rule=${rule.id} port=${expectedRulePort} protocol=${String(rule.protocol || "-")} forwardType=${expectedRuleForwardType}`,
+            `[AgentRecovery] local runtime mismatch; rule marked for reapply host=${host.id} name=${String(host.name || "-")} rule=${rule.id} port=${expectedRulePort} protocol=${String(rule.protocol || "-")} forwardType=${expectedRuleForwardType} reportedRule=${local?.ruleId || "-"} reportedType=${local?.forwardType || "-"} reportedReady=${local?.ready ?? "unknown"}`,
           );
         }
       }
@@ -6732,6 +6746,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               limitIn: rateLimits.limitIn,
               limitOut: rateLimits.limitOut,
               ...accessLimits,
+              maxIPs: 0,
               accessScope: accessScopeForRule(rule),
               ...await tunnelProtocolPolicy(tunnel),
               proxyProtocolReceive: effectiveProxyProtocol.entryReceive,
@@ -7257,7 +7272,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (agentUpgradeCompleted) {
       await db.clearHostAgentUpgradeRequest(host.id);
     }
-    const panelUrl = await resolveAgentAdvertisedPanelUrl();
+    const panelUrl = await resolveAgentAdvertisedPanelUrl(host);
     const agentMigrationTargetPanelUrl = await getAgentMigrationSwitchTarget();
     const panelMigration = await getPanelMigrationAgentDirective(Number(host.id));
     const staleMigrationUpgrade = (host as any).agentUpgradeRequested
@@ -7601,36 +7616,24 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
 
-    if (hasReportedRuntimeState) {
-      const recoverableRules = (rules as any[]).filter((rule: any) => (
-        rule
-        && runtimeBool(rule.isEnabled)
-        && !runtimeBool(rule.pendingDelete)
-        && !sniRuntimeForRule(rule)
-        && !runtimeBool(rule.isRunning)
-        && !rule.tunnelId
-        && Number(rule.sourcePort || 0) > 0
-        && localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort))
-      ));
-      if (recoverableRules.length > 0) {
-        await mapWithConcurrency(recoverableRules, 16, async (rule: any) => {
-          await db.updateRuleRunningStatus(Number(rule.id), true);
-          rule.isRunning = true;
-        });
-        appendPanelLog(
-          "info",
-          `[AgentReconcile] host=${host.id} recovered running state from local listeners rules=${recoverableRules.map((rule: any) => Number(rule.id)).join(",")}`,
-        );
-      }
+    if (recoverableRuntimeRules.length > 0) {
+      await mapWithConcurrency(recoverableRuntimeRules, 16, async rule => {
+        await db.updateRuleRunningStatus(Number(rule.id), true, null);
+        rule.isRunning = true;
+      });
+      appendPanelLog(
+        "info",
+        `[AgentReconcile] host=${host.id} recovered running state from local listeners rules=${recoverableRuntimeRules.map(rule => Number(rule.id)).join(",")}`,
+      );
     }
 
     if (sourceCleanupAction) actions.push(sourceCleanupAction);
     if (!deferActionsForLocalState) {
-      const portLimits = portAccessLimitSpecs((agentHostRules as any[]).filter(rule => (
+      const ipLimits = ipAccessLimitSpecs((agentHostRules as any[]).filter(rule => (
         rule && !runtimeBool(rule.pendingDelete) && runtimeBool(rule.isEnabled)
-        && isRuleProtocolEnabled(forwardProtocolSettings, rule, null)
+        && isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnelById.get(Number(rule.tunnelId || 0)) || null)
       )), userAccessLimits);
-      const limitAction = portAccessLimitAction(portLimits, req.body.portAccessLimitsSupported === true);
+      const limitAction = ipAccessLimitAction(ipLimits, req.body.ipAccessLimitsSupported === true);
       if (limitAction) actions.push(limitAction);
     }
     const effectiveActions = dropStalePortRemoveActions(actions, protectedRuleRemoveActionKeys);
@@ -7741,6 +7744,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
+    const linkSpeedTasks = takeLinkSpeedTasks(host.id);
     const ipSwitchTasks = takeIpSwitchAgentTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
@@ -7752,6 +7756,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const hasPendingPluginTasks = supportsPluginTasks && hasQueuedPluginAgentTasks(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
       || iperf3Tasks.length > 0
+      || linkSpeedTasks.length > 0
       || ipSwitchTasks.length > 0
       || pluginTasks.length > 0
       || hasPendingPluginTasks
@@ -7885,6 +7890,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       interactiveTasks: hasInteractiveTasks ? (
         lookingGlassTests.length
         + iperf3Tasks.length
+        + linkSpeedTasks.length
         + ipSwitchTasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
@@ -7902,6 +7908,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       stateSignatures: stateSections.signatures,
       lookingGlassTests,
       iperf3Tasks,
+      linkSpeedTasks,
       ipSwitchTasks,
       pluginTasks,
       trafficShutdownCheck,

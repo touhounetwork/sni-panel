@@ -1,6 +1,7 @@
-import { getFormatLocale } from "@/i18n";
+import { getFormatLocale, getLanguage } from "@/i18n";
 import { t as translateText } from "@/i18n";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useThemeDefinition } from "@/lib/themeRuntime";
 import LanguageSelector from "@/components/LanguageSelector";
 import PearlSidebarContent from "@/components/PearlSidebarContent";
 import DiscordAccountCard from "@/components/DiscordAccountCard";
@@ -90,6 +91,8 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { DockerUpgradeCommands } from "@/components/DockerUpgradeCommands";
 import { SniEntryVersionPreflight } from "@/components/SniEntryVersionPreflight";
 import { getSidebarMenuLabel, isSidebarMenuVisible, normalizeSidebarMenuSettings, type SidebarMenuKey } from "@shared/sidebarMenu";
+import { DEVELOPER_ANNOUNCEMENT_INTERVAL_MS } from "@shared/developerAnnouncements";
+import { ADMIN_VISIT_CHECK_INTERVAL_MS } from "@shared/visitChecks";
 import { buildPanelInstallerCommand } from "@shared/githubAccelerator";
 import { REPO_URL } from "@shared/repo";
 import PanelStartView from "./PanelStartView";
@@ -133,7 +136,6 @@ const adminMenuItems: SidebarNavItem[] = [
 const PANEL_UPGRADE_SESSION_KEY = "forwardx.panel.upgrade";
 const PANEL_UPGRADE_NOTICE_DISMISSED_KEY = "forwardx.panel.upgrade.dismissedVersion";
 const PANEL_UPGRADE_SESSION_TTL_MS = 2 * 60 * 60 * 1000;
-const UPDATE_AUTO_CHECK_REFETCH_MS = 6 * 60 * 60 * 1000;
 const MOBILE_APP_UPDATE_SESSION_KEY = "forwardx.mobile.updateNotice";
 const POPUP_ANNOUNCEMENT_SESSION_KEY = "forwardx.popupAnnouncement.seen";
 const UPGRADE_ANNOUNCEMENT_VERSION_KEY = "forwardx.upgradeAnnouncement.lastSeenVersion";
@@ -379,7 +381,7 @@ function DashboardShell({
 
   return (
     <DashboardShellContext.Provider value={true}>
-      <SidebarProvider className="pearl-shell">
+      <SidebarProvider data-theme-part="shell" className="pearl-shell">
         <DashboardLayoutContent>
           {children}
         </DashboardLayoutContent>
@@ -394,6 +396,7 @@ function DashboardLayoutContent({
   children: React.ReactNode;
 }) {
   const { user, logout } = useAuth();
+  const managedTheme = useThemeDefinition();
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar, isMobile, openMobile, setOpenMobile } = useSidebar();
   const openMobileRef = useRef(openMobile);
@@ -434,12 +437,19 @@ function DashboardLayoutContent({
   });
   const updateAutoCheckReady = !isAdmin || !!publicInfo;
   const updateAutoCheckEnabled = publicInfo?.updateAutoCheckEnabled !== false;
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
+  useEffect(() => {
+    const onVisibility = () => setPageVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
   const { data: updateInfo } = trpc.system.checkUpdate.useQuery(undefined, {
-    enabled: isAdmin && !deferBackgroundQueries && updateAutoCheckReady && updateAutoCheckEnabled,
-    refetchInterval: updateAutoCheckEnabled ? UPDATE_AUTO_CHECK_REFETCH_MS : false,
-    refetchOnWindowFocus: false,
+    enabled: isAdmin && pageVisible && !deferBackgroundQueries && updateAutoCheckReady && updateAutoCheckEnabled,
+    refetchInterval: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: false,
     retry: false,
-    staleTime: 60 * 1000,
+    staleTime: ADMIN_VISIT_CHECK_INTERVAL_MS,
   });
   const { data: storeStatus, isFetched: storeStatusFetched } = trpc.plans.storeStatus.useQuery(undefined, {
     enabled: !!user && !isAdmin,
@@ -452,10 +462,22 @@ function DashboardLayoutContent({
     retry: false,
   });
   const { data: upgradeAnnouncement, isFetched: upgradeAnnouncementFetched } = trpc.announcements.upgradePopup.useQuery(undefined, {
-    enabled: !!user && isAdmin,
-    refetchOnWindowFocus: false,
+    enabled: !!user && isAdmin && pageVisible,
+    staleTime: DEVELOPER_ANNOUNCEMENT_INTERVAL_MS,
+    refetchInterval: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: false,
     retry: false,
   });
+  // Navigation is another visit. A staleTime-aware fetch reuses fresh query data
+  // and coalesces simultaneous mount/focus/navigation requests. No idle timer.
+  useEffect(() => {
+    if (!isAdmin || !pageVisible) return;
+    void utils.announcements.upgradePopup.fetch(undefined, { staleTime: DEVELOPER_ANNOUNCEMENT_INTERVAL_MS, retry: false }).catch(() => {});
+    if (!deferBackgroundQueries && updateAutoCheckReady && updateAutoCheckEnabled) {
+      void utils.system.checkUpdate.fetch(undefined, { staleTime: ADMIN_VISIT_CHECK_INTERVAL_MS, retry: false }).catch(() => {});
+    }
+  }, [location, isAdmin, user?.id, pageVisible, deferBackgroundQueries, updateAutoCheckReady, updateAutoCheckEnabled, utils]);
   const { data: telegramStatus } = trpc.telegram.status.useQuery(undefined, {
     enabled: !!user,
     refetchInterval: (query) => {
@@ -632,18 +654,21 @@ function DashboardLayoutContent({
     }
     const currentVersion = normalizePanelVersion(publicInfo?.version);
     const userId = user?.id;
-    if (!userId || !currentVersion || !upgradeAnnouncementFetched) return;
+    if (!userId || !upgradeAnnouncementFetched) return;
+    const remote = upgradeAnnouncement?.source === "developer";
+    if (!remote && !currentVersion) return;
 
     const seenVersion = readLastSeenUpgradeAnnouncementVersion(userId);
-    if (seenVersion && comparePanelVersions(seenVersion, currentVersion) >= 0) {
+    if (!remote && seenVersion && comparePanelVersions(seenVersion, currentVersion) >= 0) {
       setShowUpgradeAnnouncement(false);
+      displayedUpgradeAnnouncementKeyRef.current = "";
       clearUpgradeAnnouncementDisplaySession(userId);
       utils.announcements.upgradePopup.setData(undefined, undefined);
       return;
     }
 
     if (upgradeAnnouncement?.id) {
-      const announcementKey = String(userId) + ":" + currentVersion + ":" + String(upgradeAnnouncement.id);
+      const announcementKey = String(userId) + ":" + (remote ? "developer" : currentVersion) + ":" + String(upgradeAnnouncement.id);
       if (displayedUpgradeAnnouncementKeyRef.current !== announcementKey) {
         displayedUpgradeAnnouncementKeyRef.current = announcementKey;
         const existingDisplay = readUpgradeAnnouncementDisplaySession(userId);
@@ -658,9 +683,14 @@ function DashboardLayoutContent({
       return;
     }
 
-    writeLastSeenUpgradeAnnouncementVersion(userId, currentVersion);
+    setShowUpgradeAnnouncement(false);
+    // Clearing a remote popup after acknowledgement must not mark a pending
+    // local upgrade notice as read before the follow-up query returns it.
+    const wasDeveloperNotice = displayedUpgradeAnnouncementKeyRef.current.includes(":developer:");
+    displayedUpgradeAnnouncementKeyRef.current = "";
+    if (!wasDeveloperNotice) writeLastSeenUpgradeAnnouncementVersion(userId, currentVersion);
     clearUpgradeAnnouncementDisplaySession(userId);
-  }, [isAdmin, publicInfo?.version, upgradeAnnouncement?.id, upgradeAnnouncementFetched, user?.id, utils.announcements.upgradePopup]);
+  }, [isAdmin, publicInfo?.version, upgradeAnnouncement?.id, upgradeAnnouncement?.source, upgradeAnnouncementFetched, user?.id, utils.announcements.upgradePopup]);
 
   useEffect(() => {
     if (!showUpgradeAnnouncement) return;
@@ -770,7 +800,11 @@ function DashboardLayoutContent({
   });
 
   const dismissUpgradeAnnouncement = trpc.announcements.dismiss.useMutation({
-    onMutate: () => {
+    onMutate: async () => {
+      await utils.announcements.upgradePopup.cancel();
+      // Remote notices are acknowledged only after the server saves the read
+      // marker. Never suppress one by the locally installed panel version.
+      if (upgradeAnnouncement?.source === "developer") return;
       if (user?.id && publicInfo?.version) {
         writeLastSeenUpgradeAnnouncementVersion(user.id, publicInfo.version);
         clearUpgradeAnnouncementDisplaySession(user.id);
@@ -780,9 +814,11 @@ function DashboardLayoutContent({
       displayedUpgradeAnnouncementKeyRef.current = "";
       utils.announcements.upgradePopup.setData(undefined, undefined);
     },
-    onSuccess: () => {
+    onSuccess: (_result, input) => {
       setShowUpgradeAnnouncement(false);
-      utils.announcements.upgradePopup.setData(undefined, undefined);
+      clearUpgradeAnnouncementDisplaySession(user?.id);
+      if (typeof input.id === "number") displayedUpgradeAnnouncementKeyRef.current = "";
+      utils.announcements.upgradePopup.setData(undefined, null);
     },
     onError: (error) => {
       toast.error(error.message || translateText("关闭升级公告失败"));
@@ -1411,7 +1447,7 @@ function DashboardLayoutContent({
 
   return (
     <>
-      <Sidebar collapsible="icon" className="pearl-sidebar border-r border-sidebar-border/60">
+      <Sidebar data-theme-part="sidebar" side={managedTheme?.manifest.views?.shell?.navigation || "left"} collapsible="icon" className="pearl-sidebar border-r border-sidebar-border/60">
         <SidebarHeader className="h-16 md:h-[var(--pearl-header-height)] justify-center mobile-sidebar-header">
           <div className={cn("flex w-full items-center gap-3", isDesktopCollapsed ? "justify-center px-0" : "px-2")}>
             {!isDesktopCollapsed ? (
@@ -1449,7 +1485,7 @@ function DashboardLayoutContent({
           {pendingSidebar ? <SidebarPresentation groups={pendingSidebar} path={currentPath} /> : <>
           {primaryMenuItems.length > 0 && (
             <SidebarGroup className={cn("pb-2 mobile-sidebar-group", mobileAuth.isNative && "pb-1.5")}>
-              <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider">{translateText("主菜单")}</SidebarGroupLabel>
+              <SidebarGroupLabel className="text-xs text-muted-foreground/80 uppercase tracking-wider">{translateText("主菜单")}</SidebarGroupLabel>
               <SidebarMenu className={cn("py-1 mobile-sidebar-menu", isDesktopCollapsed ? "items-center px-0" : "px-2")}>
                 {renderSidebarItems(primaryMenuItems)}
               </SidebarMenu>
@@ -1458,7 +1494,7 @@ function DashboardLayoutContent({
 
           {managementMenuItems.length > 0 && (
             <SidebarGroup className={cn("mt-1 shrink-0 pt-2 mobile-sidebar-group mobile-sidebar-admin-group", !mobileAuth.isNative && "border-t border-sidebar-border/50", mobileAuth.isNative && "mt-0 pt-2 border-t border-sidebar-border/50")}>
-              <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider">{translateText("管理")}</SidebarGroupLabel>
+              <SidebarGroupLabel className="text-xs text-muted-foreground/80 uppercase tracking-wider">{translateText("管理")}</SidebarGroupLabel>
               <SidebarMenu className={cn("py-1 mobile-sidebar-menu", isDesktopCollapsed ? "items-center px-0" : "px-2")}>
                 {renderSidebarItems(managementMenuItems)}
               </SidebarMenu>
@@ -1467,7 +1503,7 @@ function DashboardLayoutContent({
 
           {otherMenuItems.length > 0 && (
             <SidebarGroup className={cn("mt-1 shrink-0 pt-2 mobile-sidebar-group mobile-sidebar-admin-group", !mobileAuth.isNative && "border-t border-sidebar-border/50", mobileAuth.isNative && "mt-0 pt-2 border-t border-sidebar-border/50")}>
-              <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider">{translateText("其他")}</SidebarGroupLabel>
+              <SidebarGroupLabel className="text-xs text-muted-foreground/80 uppercase tracking-wider">{translateText("其他")}</SidebarGroupLabel>
               <SidebarMenu className={cn("py-1 mobile-sidebar-menu", isDesktopCollapsed ? "items-center px-0" : "px-2")}>
                 {renderSidebarItems(otherMenuItems)}
               </SidebarMenu>
@@ -1538,7 +1574,7 @@ function DashboardLayoutContent({
                       <Progress value={upgradeProgress.percent} className="h-1" />
                       <div className="space-y-1">
                         {upgradeProgress.steps.map((step) => (
-                          <div key={step.label} className="flex min-w-0 items-center gap-1.5 text-[10px] leading-4 text-primary/75">
+                          <div key={step.label} className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-primary/75">
                             {step.done ? (
                               <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
                             ) : step.active ? (
@@ -1644,9 +1680,9 @@ function DashboardLayoutContent({
         </SidebarFooter>
       </Sidebar>
 
-      <SidebarInset className="pearl-workspace">
+      <SidebarInset data-theme-part="workspace" className="pearl-workspace">
         {!isMobile && (
-          <header className="pearl-topbar">
+          <header data-theme-part="header" className="pearl-topbar">
             <div className="pearl-topbar-crumb">
               <span className="text-muted-foreground">{siteTitle}</span>
               <span className="text-muted-foreground/50" aria-hidden="true">/</span>
@@ -1686,7 +1722,7 @@ function DashboardLayoutContent({
             </button>
           </div>
         )}
-        <main data-mobile-main="true" className="min-w-0 flex-1 px-3 pb-3 pt-3 sm:p-6">
+        <main data-theme-part="content" data-mobile-main="true" className="min-w-0 flex-1 px-3 pb-3 pt-3 sm:p-6">
           <div key={location} className="route-content-enter min-w-0">
             {children}
           </div>
@@ -2229,7 +2265,7 @@ function DashboardLayoutContent({
           </DialogTitle>
           <DialogDescription>{translateText("关闭后可在公告中查看。")}</DialogDescription>
           <div
-            className="max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
+            className="forwardx-rich-text max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
             dangerouslySetInnerHTML={{ __html: renderMixedHtml(popupAnnouncement?.content || "") }}
           />
           <DialogFooter>
@@ -2244,14 +2280,17 @@ function DashboardLayoutContent({
         <DialogContent className="sm:max-w-lg [&>button]:hidden">
           <DialogTitle className="flex items-center gap-2">
             <Megaphone className="h-5 w-5" />
-            {upgradeAnnouncement?.title || translateText("升级公告")}
+            {(getLanguage() === "en" ? upgradeAnnouncement?.englishTitle || upgradeAnnouncement?.title : upgradeAnnouncement?.title) || translateText("升级公告")}
           </DialogTitle>
-          <DialogDescription>{translateText("已检测到面板已升级。请阅读本次版本公告，")}{UPGRADE_ANNOUNCEMENT_COUNTDOWN_SECONDS}{translateText("S 后可确认进入页面。")}</DialogDescription>
+          <DialogDescription>{upgradeAnnouncement?.source === "developer"
+            ? translateText("请留意以下重要通知。")
+            : <>{translateText("已检测到面板已升级。请阅读本次版本公告，")}{UPGRADE_ANNOUNCEMENT_COUNTDOWN_SECONDS}{translateText("S 后可确认进入页面。")}</>}</DialogDescription>
           <div
-            className="max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
-            dangerouslySetInnerHTML={{ __html: renderMixedHtml(upgradeAnnouncement?.content || "") }}
+            className="forwardx-rich-text max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
+            dangerouslySetInnerHTML={{ __html: renderMixedHtml((getLanguage() === "en" ? upgradeAnnouncement?.englishContent || upgradeAnnouncement?.content : upgradeAnnouncement?.content) || "") }}
           />
           <DialogFooter>
+            {upgradeAnnouncement?.releaseUrl && <Button variant="outline" asChild><a href={upgradeAnnouncement.releaseUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" />{translateText("查看更新")}</a></Button>}
             <Button
               onClick={() => upgradeAnnouncement?.id && dismissUpgradeAnnouncement.mutate({ id: upgradeAnnouncement.id })}
               disabled={upgradeAnnouncementCountdown > 0 || dismissUpgradeAnnouncement.isPending}

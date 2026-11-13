@@ -691,6 +691,7 @@ export async function getForwardRuleTrafficContextsByIds(ruleIds: number[]) {
         id: forwardRules.id,
         hostId: forwardRules.hostId,
         name: forwardRules.name,
+        sourcePort: forwardRules.sourcePort,
         tunnelId: forwardRules.tunnelId,
         forwardGroupId: forwardRules.forwardGroupId,
         forwardGroupRuleId: forwardRules.forwardGroupRuleId,
@@ -731,13 +732,14 @@ export async function getForwardRuleTrafficContextsByIds(ruleIds: number[]) {
   const parentRuleIds = Array.from(new Set(rows
     .map((row) => Number(row.forwardGroupRuleId || 0))
     .filter((id) => Number.isInteger(id) && id > 0)));
-  const parentByRuleId = new Map<number, { userId: number; groupId: number; isTemplate: boolean; name: string }>();
+  const parentByRuleId = new Map<number, { userId: number; groupId: number; isTemplate: boolean; name: string; sourcePort: number }>();
   for (let index = 0; index < parentRuleIds.length; index += 400) {
     const parents = await db
       .select({
         id: forwardRules.id,
         userId: forwardRules.userId,
         name: forwardRules.name,
+        sourcePort: forwardRules.sourcePort,
         groupId: forwardRules.forwardGroupId,
         isTemplate: forwardRules.isForwardGroupTemplate,
       })
@@ -747,6 +749,7 @@ export async function getForwardRuleTrafficContextsByIds(ruleIds: number[]) {
       parentByRuleId.set(Number(parent.id), {
         userId: Number(parent.userId),
         name: String(parent.name || ""),
+        sourcePort: Number(parent.sourcePort),
         groupId: Number(parent.groupId || 0),
         isTemplate: parent.isTemplate === true || parent.isTemplate === 1 || parent.isTemplate === "1",
       });
@@ -791,6 +794,9 @@ export async function getForwardRuleTrafficContextsByIds(ruleIds: number[]) {
       rule: {
         id: row.id,
         name: row.name,
+        sourcePort: row.sourcePort,
+        quotaSourcePort: parent?.isTemplate && parent.groupId > 0 && parent.groupId === Number(row.forwardGroupId || 0)
+          ? parent.sourcePort : row.sourcePort,
         hostId: row.hostId,
         tunnelId: row.tunnelId,
         forwardGroupId: row.forwardGroupId,
@@ -1235,10 +1241,25 @@ export async function getForwardGroupChildRulesForMember(memberId: number) {
     .orderBy(desc(forwardRules.createdAt));
 }
 
+const FORWARD_RULE_PORT_FIELDS = ["sourcePort", "targetPort", "gostRelayPort", "tunnelExitPort", "udpOverTcpPort"] as const;
+
+/** SQLite keeps 80.5 in an INTEGER column as REAL, and a Go Agent that meets a
+ * fractional port rejects the whole desired state of its host. Every writer
+ * (panel, Telegram bot, AI tools, imports) passes through this guard. */
+export function assertIntegerForwardRulePorts(data: Record<string, unknown>) {
+  for (const field of FORWARD_RULE_PORT_FIELDS) {
+    const value = data[field];
+    if (value === undefined || value === null) continue;
+    const port = Number(value);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`端口必须是 0-65535 之间的整数：${field}`);
+  }
+}
+
 export async function createForwardRule(rule: InsertForwardRule & { personalGroupIds?: number[] }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const payload = { ...(rule as any) };
+  assertIntegerForwardRulePorts(payload);
   const personalGroupIds = payload.personalGroupIds;
   delete payload.personalGroupIds;
   if (payload.sortOrder === undefined && !payload.forwardGroupRuleId && !payload.forwardGroupMemberId) {
@@ -1347,6 +1368,7 @@ export async function updateForwardRule(id: number, input: Partial<InsertForward
   const db = await getDb();
   if (!db) return;
   const { personalGroupIds, ...data } = input;
+  assertIntegerForwardRulePorts(data as Record<string, unknown>);
   const audit = shouldAuditConfigPatch(data as any);
   const changesDisplay = audit || ["isRunning", "isEnabled", "runtimeDiagnostic", "protocolBlockReason", "ruleLimitReason", "disabledByUser", "disabledByGroup", "disabledByTunnel"]
     .some(key => Object.hasOwn(data, key));

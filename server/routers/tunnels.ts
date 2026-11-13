@@ -628,6 +628,10 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
     ddnsEnabled: (host as any).ddnsEnabled,
     ddnsDomain: (host as any).ddnsDomain,
     lastDdnsValue: (host as any).lastDdnsValue,
+    geoCountryCode: host.geoCountryCode ?? null,
+    geoCountryName: host.geoCountryName ?? null,
+    geoRegion: host.geoRegion ?? null,
+    geoEmoji: host.geoEmoji ?? null,
     isOnline: !!(host as any).isOnline,
     lastHeartbeat: (host as any).lastHeartbeat ?? null,
     portRangeStart: (host as any).portRangeStart,
@@ -935,7 +939,7 @@ export const tunnelsRouter = router({
           () => db.getTunnelLatencySeries(input.tunnelId, { ...window, bucketSeconds: latencyChartBucketSeconds(window.hours) }),
         );
       }),
-    create: protectedProcedure
+    create: adminProcedure
       .input(z.object({
         name: z.string().min(1).max(128),
         entryGroupId: z.number().nullable().optional(),
@@ -946,7 +950,7 @@ export const tunnelsRouter = router({
         relayMode: tunnelRelayModeSchema.optional().default("chain"),
         forwardxVersion: forwardXVersionSchema.optional().default("v1"),
         ...forwardXV3InputFields,
-        listenPort: z.number().min(0).max(65535).optional().default(0),
+        listenPort: z.number().int().min(0).max(65535).optional().default(0),
         mimicPort: z.number().int().min(0).max(65535).optional().default(0),
         rateLimitMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
         trafficMultiplier: z.number().int().min(1).max(5000).optional().default(100),
@@ -1188,7 +1192,7 @@ export const tunnelsRouter = router({
           releaseHostPortReservations(heldReservations);
         }
       })),
-    update: protectedProcedure
+    update: adminProcedure
       .input(z.object({
         id: z.number(),
         name: z.string().min(1).max(128).optional(),
@@ -1200,7 +1204,7 @@ export const tunnelsRouter = router({
         relayMode: tunnelRelayModeSchema.optional(),
         forwardxVersion: forwardXVersionSchema.optional(),
         ...forwardXV3InputFields,
-        listenPort: z.number().min(0).max(65535).optional(),
+        listenPort: z.number().int().min(0).max(65535).optional(),
         // Non-persistent client hint: false means the value is merely the
         // form's persisted value and may be repaired after a route change.
         // When omitted, retain the legacy changed-value heuristic.
@@ -1807,7 +1811,7 @@ export const tunnelsRouter = router({
           releaseHostPortReservations(heldReservations);
         }
       }))),
-    deleteImpact: protectedProcedure
+    deleteImpact: adminProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input, ctx }) => {
         const tunnel = await db.getTunnelById(input.id);
@@ -1815,7 +1819,7 @@ export const tunnelsRouter = router({
         if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("无权操作此隧道");
         return getTunnelDeleteImpact(input.id);
       }),
-    delete: protectedProcedure
+    delete: adminProcedure
       .input(z.object({ id: z.number(), confirmRules: z.boolean().optional() }))
       .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.id}`, async () => {
         const tunnel = await db.getTunnelById(input.id);

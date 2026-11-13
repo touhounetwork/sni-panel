@@ -1,12 +1,12 @@
 # 文档目录
 
-ForwardX 通过 Agent 管理 Linux 主机上的转发资源、业务规则、用户权限、流量和延迟。本文档按部署、使用和运维组织；当前发布及文档站更新状态见 [版本与文档更新](./releases.md)，已安装版本以面板与主机实际显示为准。
+ForwardX 通过 Agent 管理 Linux 主机上的转发资源、业务规则、用户权限、流量和延迟。文档按部署、使用和运维三部分组织；各组件当前版本见 [版本与文档更新](./releases.md)。
 
 ## 第一次使用
 
 [部署前准备](./preparation.md) → [选择部署方式](./deploy-panel.md) → [首次初始化](./first-setup.md) → [安装 Agent](./agent.md) → 创建链路资源 → [添加规则](./rules.md)。
 
-只想先跑通一条规则，直接阅读 [快速开始](./quick-start.md)。
+只想先跑通一条规则，直接看 [快速开始](./quick-start.md)。
 
 ## 按需求查找
 
@@ -14,6 +14,7 @@ ForwardX 通过 Agent 管理 Linux 主机上的转发资源、业务规则、用
 | --- | --- |
 | 全新安装 | [快速开始](./quick-start.md) → [首次初始化](./first-setup.md) |
 | 找不到操作或界面变了 | [界面与常用操作](./interface.md) |
+| 切换主题、上传主题或开发后台外观 | [主题管理、开发与接口](./themes.md) |
 | 规则不通、流量不更新、探测异常 | [故障排查](./troubleshooting.md)、[流量和延迟](./traffic-latency.md) |
 | 设置单规则额度或用户权限 | [转发规则](./rules.md)、[用户与套餐](./users-billing.md) |
 | 升级、备份或迁移 | [升级备份](./upgrade-backup.md)、[迁移](./migration.md) |
@@ -87,4 +88,4 @@ ForwardX 通过 Agent 管理 Linux 主机上的转发资源、业务规则、用
 - [插件与扩展开发](./plugins.md)：插件清单、权限、Agent 动作和动态资源。
 - [架构参考](../ARCHITECTURE_CN.md)：项目模块与数据流。
 
-截图可能随界面更新略有差异，以当前页面和业务校验提示为准。
+截图可能和当前界面略有差异，以实际页面为准。

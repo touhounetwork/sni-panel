@@ -3,6 +3,7 @@ import { t as translateText } from "@/i18n";
 import DashboardLayout from "@/components/DashboardLayout";
 import UserSelect from "@/components/UserSelect";
 import BillingExportButton from "@/components/BillingExportButton";
+import { subscriptionPortRangeText } from "@/lib/planDisplay";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import DataSectionLoading from "@/components/DataSectionLoading";
@@ -386,6 +387,27 @@ export default function Billing() {
     onError: (error) => toast.error(error.message || translateText("更新失败")),
   });
 
+  const deletePaymentOrder = trpc.billing.deletePaymentOrder.useMutation({
+    onSuccess: () => {
+      toast.success(translateText("订单已删除"));
+      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
+      utils.payment.invalidate();
+      utils.plans.invalidate();
+    },
+    onError: (error) => toast.error(error.message || translateText("删除订单失败")),
+  });
+
+  const confirmDeletePaymentOrder = async (item: any) => {
+    const confirmed = await confirmDialog({
+      title: translateText("删除订单"),
+      description: translateText("确认删除订单 {0}？待支付订单将关闭并释放库存和折扣占用。若后续确认收到真实付款，订单会重新显示并继续入账。", [item.paymentOrderNo]),
+      confirmText: translateText("删除"),
+      tone: "destructive",
+    });
+    if (confirmed) deletePaymentOrder.mutate({ outTradeNo: item.paymentOrderNo });
+  };
+
   const deleteCancelledSubscription = trpc.plans.deleteCancelledSubscription.useMutation({
     onSuccess: () => {
       toast.success(translateText("已取消的订阅记录已删除"));
@@ -702,6 +724,13 @@ export default function Billing() {
                             <div className={`text-right text-sm font-medium ${ledgerTone(item)}`}>
                               {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
                             </div>
+                            {item.kind === "payment" && item.canDelete && (
+                              <Button type="button" size="icon" variant="ghost" className="h-8 w-8 text-destructive"
+                                title={translateText("删除订单")} aria-label={translateText("删除订单")}
+                                onClick={() => void confirmDeletePaymentOrder(item)} disabled={deletePaymentOrder.isPending}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
                             {item.kind === "subscription" && item.status === "cancelled" && (
                               <Button
                                 type="button"
@@ -720,9 +749,9 @@ export default function Billing() {
                         </div>
                         <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
                           <MobileInfoRow label={translateText("用户")}>{item.name || item.username || `#${item.userId}`}</MobileInfoRow>
-                          <MobileInfoRow label={translateText("类型")}><Badge variant="outline">{item.category}</Badge></MobileInfoRow>
+                          <MobileInfoRow label={translateText("类型")}><Badge className="shrink-0 whitespace-nowrap" variant="outline">{item.category}</Badge></MobileInfoRow>
                           <MobileInfoRow label={translateText("状态")}>
-                            <Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{translateText(item.statusLabel || item.status)}</Badge>
+                            <Badge className="shrink-0 whitespace-nowrap" variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{translateText(item.statusLabel || item.status)}</Badge>
                           </MobileInfoRow>
                           <MobileInfoRow label={translateText("关联")} valueClassName="font-mono text-xs text-muted-foreground">{relatedInfo}</MobileInfoRow>
                           {item.kind === "payment" && item.tradeNo && <MobileInfoRow label={translateText("网关流水")} valueClassName="font-mono text-xs text-muted-foreground">{item.tradeNo}</MobileInfoRow>}
@@ -768,11 +797,11 @@ export default function Billing() {
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell><Badge variant="outline">{item.category}</Badge></TableCell>
-                          <TableCell className={ledgerTone(item)}>
+                          <TableCell className="whitespace-nowrap"><Badge className="shrink-0 whitespace-nowrap" variant="outline">{item.category}</Badge></TableCell>
+                          <TableCell className={`whitespace-nowrap ${ledgerTone(item)}`}>
                             {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
                           </TableCell>
-                          <TableCell><Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{translateText(item.statusLabel || item.status)}</Badge></TableCell>
+                          <TableCell className="whitespace-nowrap"><Badge className="shrink-0 whitespace-nowrap" variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{translateText(item.statusLabel || item.status)}</Badge></TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">
                             <p>{item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-")}</p>
                             {item.kind === "payment" && item.tradeNo && <p className="mt-1">{translateText("网关流水")}：{item.tradeNo}</p>}
@@ -782,6 +811,13 @@ export default function Billing() {
                             {item.paidAt && <p className="mt-1 text-xs text-muted-foreground">{translateText("支付时间")}：{dateText(item.paidAt)}</p>}
                           </TableCell>
                           <TableCell>
+                            {item.kind === "payment" && item.canDelete && (
+                              <Button type="button" size="icon" variant="ghost" className="h-8 w-8 text-destructive"
+                                title={translateText("删除订单")} aria-label={translateText("删除订单")}
+                                onClick={() => void confirmDeletePaymentOrder(item)} disabled={deletePaymentOrder.isPending}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
                             {item.kind === "subscription" && item.status === "cancelled" && (
                               <Button
                                 type="button"
@@ -836,7 +872,7 @@ export default function Billing() {
                         <Badge variant="outline" className="shrink-0">{sub.source === "payment" ? translateText("购买") : translateText("后台分配")}</Badge>
                       </div>
                       <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
-                        <MobileInfoRow label={translateText("端口段")}>{sub.portRangeStart}-{sub.portRangeEnd}</MobileInfoRow>
+                        <MobileInfoRow label={translateText("端口段")}>{subscriptionPortRangeText(sub)}</MobileInfoRow>
                         <MobileInfoRow label={translateText("到期时间")}>{sub.expiresAt ? new Date(sub.expiresAt).toLocaleString(getFormatLocale()) : translateText("永久")}</MobileInfoRow>
                       </div>
                     </div>
@@ -861,7 +897,7 @@ export default function Billing() {
                         <TableRow key={sub.id}>
                           <TableCell>{sub.name || sub.username || translateText("用户 #{0}", [sub.userId])}</TableCell>
                           <TableCell>{sub.planName || translateText("套餐 #{0}", [sub.planId])}</TableCell>
-                          <TableCell>{sub.portRangeStart}-{sub.portRangeEnd}</TableCell>
+                          <TableCell>{subscriptionPortRangeText(sub)}</TableCell>
                           <TableCell><Badge variant="outline">{sub.source === "payment" ? translateText("购买") : translateText("后台分配")}</Badge></TableCell>
                           <TableCell>{sub.expiresAt ? new Date(sub.expiresAt).toLocaleString(getFormatLocale()) : translateText("永久")}</TableCell>
                         </TableRow>

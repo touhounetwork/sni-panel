@@ -70,6 +70,7 @@ export default defineConfig({
           { text: "部署前准备", link: "/guide/preparation" },
           { text: "首次初始化", link: "/guide/first-setup" },
           { text: "界面与常用操作", link: "/guide/interface" },
+          { text: "主题开发与接口", link: "/guide/themes" },
         ],
       },
       {

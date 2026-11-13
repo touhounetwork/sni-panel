@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import ts from "typescript";
-import { createPaginationHarness, findElements } from "@/test/paginationHarness";
+import { createPaginationHarness, findElements, pageComponentStubs } from "@/test/paginationHarness";
 
 const require = createRequire(import.meta.url);
 type Request = { procedure: string; input: any };
@@ -110,6 +110,8 @@ function setup(storage = new Map<string, string>(), count = 25, grouped = false,
       URLSearchParams, setTimeout, clearTimeout,
       require(id: string) {
         if (id in mocks) return mocks[id];
+        const stubs = pageComponentStubs(harness.hooks.useState);
+        if (id in stubs) return stubs[id];
         if (id === "@/i18n") return { ...require(id), t: (key: string, values: any[] = []) => key.replace(/\{(\d+)\}/g, (_, i) => String(values[Number(i)])) };
         if (id === "@/hooks/useRuleTableLayout" || id.includes("/useRuleBulk")) return load(`client/src/${id.slice(2)}.ts`);
         if (id === "@/lib/rulePageSize") return load("client/src/lib/rulePageSize.ts");

@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { createPaginationHarness, findElements } from "@/test/paginationHarness";
+import { createPaginationHarness, findElements, pageComponentStubs } from "@/test/paginationHarness";
 
 const require = createRequire(import.meta.url);
 const limits: Record<string, number> = { statusSummary: 100, watchMetrics: 200, latestMetricsSummary: 500, trafficSummary: 500 };
@@ -87,7 +87,7 @@ function setup(storage = new Map<string, string>(), count = 2400, visible = fals
     "@/components/SortableDragHandle": { useSortableReorder: (options: any) => ({ disabled: options.disabled }), SortableItem: "SortableItem", SortableReorderContext: "SortableReorderContext" },
     "@/lib/utils": { cn: (...values: any[]) => values.filter(Boolean).join(" ") },
     "@/lib/localizedToast": { toast: { success() {}, error() {} } },
-    "@/i18n": { t: (key: string, values: any[] = []) => key.replace(/\{(\d+)\}/g, (_, i) => String(values[Number(i)])), getFormatLocale: () => "zh-CN" },
+    "@/i18n": { t: (key: string, values: any[] = []) => key.replace(/\{(\d+)\}/g, (_, i) => String(values[Number(i)])), getFormatLocale: () => "zh-CN", getLanguage: () => "zh-CN" },
   };
   const module = { exports: {} as any };
   runInNewContext(ts.transpileModule(readFileSync("client/src/pages/Hosts.tsx", "utf8"), {
@@ -99,6 +99,8 @@ function setup(storage = new Map<string, string>(), count = 2400, visible = fals
       setInterval: (callback: () => void) => { const id = timers.size + 1; timers.set(id, callback); return id; }, clearInterval: (id: number) => timers.delete(id) },
     require(id: string) {
       if (id in mocks) return mocks[id];
+      const stubs = pageComponentStubs(harness.hooks.useState);
+      if (id in stubs) return stubs[id];
       if (id === "react/jsx-runtime" || id.startsWith("@shared/") || id.startsWith("@/lib/") || id === "@/components/hosts/hostDisplay") return require(id);
       return new Proxy({ __esModule: true }, { get: (_, key) => key === "__esModule" ? true : String(key) });
     },

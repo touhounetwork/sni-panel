@@ -284,6 +284,7 @@ var publicIPv4Cache string
 var publicIPv6Cache string
 var publicIPCheckedAt time.Time
 var publicIPRefreshRunning bool
+var publicIPFastRefreshUntil time.Time // Guarded by publicIPMu; bounded post-switch observation.
 var lastTrafficCollectAt time.Time
 var nextTrafficCollectInterval = trafficCollectInterval
 var trafficCollectMu sync.Mutex
@@ -312,6 +313,8 @@ var heartbeatWakeCh = make(chan struct{}, 1)
 var heartbeatWakeFromSSE atomic.Bool // SSE 唤醒时置 true；主循环读取后清零
 var heartbeatUrgentWakeFromSSE atomic.Bool
 var heartbeatForceReconcileWake atomic.Bool
+var heartbeatMetricsWake atomic.Bool
+var lastMetricsHeartbeatAt atomic.Int64
 var agentEventStreamConnected atomic.Bool
 var agentVerboseLogs = isEnvTruthy(os.Getenv(agentVerboseEnv))
 var queuedActionMu sync.Mutex
@@ -856,6 +859,7 @@ type heartbeatResp struct {
 	DNSWatch                  []dnsWatchItem           `json:"dnsWatch"`
 	LookingGlassTests         []lookingGlassTask       `json:"lookingGlassTests"`
 	Iperf3Tasks               []iperf3Task             `json:"iperf3Tasks"`
+	LinkSpeedTasks            []linkSpeedTask          `json:"linkSpeedTasks"`
 	IPSwitchTasks             []ipSwitchTask           `json:"ipSwitchTasks"`
 	PluginTasks               []pluginAgentTask        `json:"pluginTasks"`
 	AgentUpgrade              *agentUpgrade            `json:"agentUpgrade"`
@@ -872,6 +876,7 @@ type heartbeatResp struct {
 	ReconciliationCoalesced   bool                     `json:"reconciliationCoalesced,omitempty"`
 	NextPresenceInterval      int                      `json:"nextPresenceInterval,omitempty"`
 	MetricsOnly               bool                     `json:"metricsOnly,omitempty"`
+	RefreshMetrics            bool                     `json:"refreshMetrics,omitempty"`
 	TrafficReportInterval     int                      `json:"trafficReportInterval,omitempty"`
 }
 
@@ -2488,6 +2493,7 @@ type action struct {
 	HandoffOnly               bool                `json:"-"`
 
 	PortAccessLimits []portAccessLimitSpec `json:"portAccessLimits,omitempty"`
+	IPAccessLimits   []ipAccessLimitSpec   `json:"ipAccessLimits,omitempty"`
 }
 
 type desiredState struct {
@@ -2946,6 +2952,7 @@ func main() {
 		fromSSE := heartbeatWakeFromSSE.Swap(false)
 		urgentRefresh := heartbeatUrgentWakeFromSSE.Swap(false)
 		forceReconcileWake := heartbeatForceReconcileWake.Swap(false)
+		metricsWake := heartbeatMetricsWake.Swap(false)
 		now := time.Now()
 		if pending > 0 {
 			if shouldLogAgentReport("heartbeat-pending-continue", agentReportLogInterval) {
@@ -2955,12 +2962,15 @@ func main() {
 		// SSE 唤醒 + 有 actions 正在处理：只发轻量 keepalive（不做 readiness 扫描，
 		// 仅上报指标并告知面板 Agent 正忙）。完整心跳由定时器或下一次 SSE 唤醒触发。
 		useActionBacklogKeepalive := !forceReconcileWake && shouldUseBusyHeartbeat(fromSSE, urgentRefresh, pending, lastFullHeartbeatAt, now)
-		useMetricsOnlyHeartbeat := shouldUseMetricsOnlyHeartbeat(metricsOnlyMode, fromSSE, urgentRefresh, forceReconcileWake, pending, lastFullHeartbeatAt, now)
+		useMetricsOnlyHeartbeat := shouldUseMetricsOnlyHeartbeat(metricsOnlyMode || metricsWake, fromSSE, urgentRefresh, forceReconcileWake, pending, lastFullHeartbeatAt, now)
 		if useActionBacklogKeepalive || useMetricsOnlyHeartbeat {
 			result, err := heartbeatKeepalive(cfg)
 			requestSkipped := errors.Is(err, errHeartbeatRequestInFlight)
 			if requestSkipped {
 				restoreHeartbeatWakeIntent(fromSSE, urgentRefresh, forceReconcileWake)
+				if metricsWake {
+					heartbeatMetricsWake.Store(true)
+				}
 			}
 			if err != nil && !requestSkipped {
 				recordPanelMigrationHeartbeatFailure(cfg, err)
@@ -2968,6 +2978,7 @@ func main() {
 			} else {
 				if err == nil {
 					recordPanelMigrationHeartbeatSuccess()
+					lastMetricsHeartbeatAt.Store(time.Now().UnixMilli())
 					metricsOnlyMode = result.MetricsOnly
 				}
 			}
@@ -2993,6 +3004,9 @@ func main() {
 			requestSkipped := errors.Is(err, errHeartbeatRequestInFlight)
 			if requestSkipped {
 				restoreHeartbeatWakeIntent(fromSSE, urgentRefresh, forceReconcileWake || forceFullAudit)
+				if metricsWake {
+					heartbeatMetricsWake.Store(true)
+				}
 			}
 			if err != nil && !requestSkipped {
 				recordPanelMigrationHeartbeatFailure(cfg, err)
@@ -3000,6 +3014,7 @@ func main() {
 			} else {
 				if err == nil {
 					recordPanelMigrationHeartbeatSuccess()
+					lastMetricsHeartbeatAt.Store(time.Now().UnixMilli())
 					metricsOnlyMode = result.MetricsOnly
 					if !result.ReconciliationCoalesced {
 						lastFullHeartbeatAt = time.Now()
@@ -3223,6 +3238,17 @@ func restoreHeartbeatWakeIntent(fromSSE bool, urgentRefresh bool, forceReconcile
 
 func wakeHeartbeat() {
 	heartbeatForceReconcileWake.Store(true)
+	signalHeartbeatWake()
+}
+
+// Presence remains collection-free. It can wake the existing serialized
+// metrics lane when SSE is unavailable, without forcing a runtime audit.
+func requestMetricsHeartbeat(refresh bool, now time.Time) {
+	last := lastMetricsHeartbeatAt.Load()
+	if !refresh || (last > 0 && now.UnixMilli()-last < 3000) {
+		return
+	}
+	heartbeatMetricsWake.Store(true)
 	signalHeartbeatWake()
 }
 
@@ -3567,7 +3593,12 @@ func setRuntimePanelURL(panelURL string) {
 	if normalized == "" {
 		return
 	}
+	panelURLStream.Lock()
 	runtimePanelURL.Store(normalized)
+	if panelURLStream.cancel != nil && panelURLStream.url != normalized {
+		panelURLStream.cancel()
+	}
+	panelURLStream.Unlock()
 }
 
 func currentPanelURL(cfg Config) string {
@@ -3690,7 +3721,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	anomalous = anomalous || resp.ReconciliationCoalesced
 	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
-	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.PluginTasks) > 0 || len(resp.IPSwitchTasks) > 0
+	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.LinkSpeedTasks) > 0 || len(resp.PluginTasks) > 0 || len(resp.IPSwitchTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
 	if anomalous {
 		interval = agentReportLogInterval
@@ -3960,6 +3991,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		heartbeatStaticChanged(currentStatic, previousStatic) ||
 		time.Since(previousStatic.ReportedAt) >= heartbeatStaticReportInterval
 	payload := map[string]any{}
+	payload["linkSpeedSupported"] = true
 	if compactEnabled {
 		payload["m"] = []any{
 			cpuUsageValue,
@@ -4105,6 +4137,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	}
 	for _, task := range resp.Iperf3Tasks {
 		go handleIperf3Task(cfg, task)
+	}
+	for _, task := range resp.LinkSpeedTasks {
+		go handleLinkSpeedTask(cfg, task)
 	}
 	for _, task := range resp.IPSwitchTasks {
 		go handleIPSwitchTask(cfg, task)
@@ -4386,6 +4421,7 @@ func heartbeatPresenceRequest(cfg Config, expectedGeneration *uint64) (int, uint
 		return 0, requestGeneration, nil
 	}
 	agentPresenceSupported.Store(true)
+	requestMetricsHeartbeat(resp.RefreshMetrics, time.Now())
 	if handlePanelMigrationDirective(cfg, resp.PanelMigration) {
 		return resp.NextPresenceInterval, requestGeneration, nil
 	}
@@ -4944,8 +4980,9 @@ func runAgentEventStream(cfg Config) error {
 		return err
 	}
 	query, _ := json.Marshal(env)
-	panelURL := currentPanelURL(cfg)
-	req, err := http.NewRequest("GET", panelURL+"/api/stream?e="+url.QueryEscape(string(query)), nil)
+	streamContext, panelURL, releaseStream := newPanelURLStreamContext(cfg)
+	defer releaseStream()
+	req, err := http.NewRequestWithContext(streamContext, "GET", panelURL+"/api/stream?e="+url.QueryEscape(string(query)), nil)
 	if err != nil {
 		return err
 	}
@@ -5205,6 +5242,23 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 				logf("mimic runtime sync skipped; cached state healthy diagnostics=%s", mimicRuntimeDiagnostics())
 			}
 			return true
+		}
+		if a.ForwardType == "ip-access-limit-sync" {
+			err := configureIPAccessLimits(a.IPAccessLimits, false)
+			ok = err == nil
+			rememberRuntimeActionResult(a, ok)
+			if err != nil {
+				actionMessage.set("IP限制未生效: %v", err)
+				if shouldLogAgentReport("ip-access-limit-sync", agentReportLogInterval) {
+					logf("%s", actionMessage.get())
+				}
+			} else {
+				actionMessage.set("IP限制已同步 users=%d; different source IPs share entry-host quota; probation=5s bidirectionalBytes>=512", len(a.IPAccessLimits))
+			}
+			if a.ReportStatus != nil && *a.ReportStatus {
+				reportActionStatus(cfg, a, ok, actionMessage.get())
+			}
+			return ok
 		}
 		if a.ForwardType == "port-access-limit-sync" {
 			err := syncPortAccessLimits(systemPortLimitFirewall{}, a.PortAccessLimits, false)
@@ -5957,6 +6011,9 @@ func runtimeActionServicesHealthy(a action) bool {
 	if a.ForwardType == "port-access-limit-sync" {
 		return portAccessLimitsReady(a)
 	}
+	if a.ForwardType == "ip-access-limit-sync" {
+		return configureIPAccessLimits(a.IPAccessLimits, true) == nil
+	}
 	if isWireGuardRuntimeAction(a) {
 		if a.Op == "remove" {
 			return !wireGuardRuntimeReady(a.TunnelID, nil)
@@ -6474,6 +6531,11 @@ func actionCommandSignature(a action) string {
 	if len(a.PortAccessLimits) > 0 {
 		if raw, err := json.Marshal(a.PortAccessLimits); err == nil {
 			write(string(raw))
+		}
+	}
+	if len(a.IPAccessLimits) > 0 {
+		if raw, err := json.Marshal(a.IPAccessLimits); err == nil {
+			write("ip-access-limits:" + string(raw))
 		}
 	}
 	if a.ForceRuntimeSync {
@@ -11044,17 +11106,7 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 		actionMessage.set("fxp create runtime dir failed: %v", err)
 		return false
 	}
-	if spec.Role == "entry" || spec.Role == "sni-splitter" {
-		spec.PanelURL = currentPanelURL(cfg)
-		spec.Token = cfg.Token
-		spec.InstallationID = currentAgentInstallationID()
-	} else if isFXPEntryGroup(spec) {
-		for index := range spec.Entries {
-			spec.Entries[index].PanelURL = currentPanelURL(cfg)
-			spec.Entries[index].Token = cfg.Token
-			spec.Entries[index].InstallationID = currentAgentInstallationID()
-		}
-	}
+	spec = withFXPAgentIdentity(spec, cfg)
 	if isFXPEntryGroup(spec) || spec.Role == "exit" {
 		spec.ControlSocket = configPath + ".sock"
 	}
@@ -14560,6 +14612,7 @@ func postHeartbeatAfterStart(client *http.Client, cfg Config, path string, paylo
 	if path == "/api/agent/heartbeat" {
 		if fields, ok := payload.(map[string]any); ok {
 			fields["portAccessLimitsSupported"] = true
+			fields["ipAccessLimitsSupported"] = true
 			fields["trafficShutdownSupported"] = trafficShutdownSupported()
 		}
 	}
@@ -15331,7 +15384,7 @@ func osInfo() string {
 func publicIPs() (string, string) {
 	publicIPMu.Lock()
 	ipv4, ipv6 := publicIPv4Cache, publicIPv6Cache
-	stale := publicIPCheckedAt.IsZero() || time.Since(publicIPCheckedAt) >= publicIPRefreshInterval
+	stale := publicIPCheckedAt.IsZero() || time.Since(publicIPCheckedAt) >= publicIPRefreshIntervalFor(time.Now(), publicIPFastRefreshUntil)
 	if stale && !publicIPRefreshRunning {
 		publicIPRefreshRunning = true
 		go refreshPublicIPs()
@@ -15368,6 +15421,7 @@ func refreshPublicIPs() {
 	ipv4 := <-ipv4Ch
 	ipv6 := <-ipv6Ch
 	publicIPMu.Lock()
+	addressChanged := (ipv4 != "" && publicIPv4Cache != "" && ipv4 != publicIPv4Cache) || (ipv6 != "" && publicIPv6Cache != "" && ipv6 != publicIPv6Cache)
 	if ipv4 != "" {
 		publicIPv4Cache = ipv4
 	}
@@ -15384,6 +15438,10 @@ func refreshPublicIPs() {
 	}
 	publicIPRefreshRunning = false
 	publicIPMu.Unlock()
+	if addressChanged {
+		logf("[HostAddress] public IP change detected; requesting configuration refresh")
+		wakeHeartbeat()
+	}
 }
 
 func fetchPublicIP(urls []string) string {

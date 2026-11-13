@@ -192,7 +192,7 @@ test("encrypted registration fences retired installations while legacy hosts can
       }
       await closeDatabase(); await connectDatabase(config); await ensureDatabaseSchema();
       assert.equal((await register(a)).agentSuperseded, true, "retirement survives reopening the database");
-      await assert.rejects(() => foreign.getInstallToken({ id: tokenId }), /无权/);
+      await assert.rejects(() => foreign.getInstallToken({ id: tokenId }), /无权|required permission/);
     } finally {
       server.closeAllConnections();
       if (server.listening) await new Promise((resolve) => server.close(resolve));

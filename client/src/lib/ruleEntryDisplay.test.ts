@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterRuleEntryAddressesForDisplay, getEntryAddressFamily, resolveRuleEntryHost } from "./ruleEntryDisplay";
+import { appendRuleEntryIpv6Addresses, filterRuleEntryAddressesForDisplay, getEntryAddressFamily, resolveRuleEntryHost } from "./ruleEntryDisplay";
 
 test("uses a nested shared-resource host when it is not in the global host list", () => {
   const nestedHost: { id: number; ddnsEnabled?: boolean; ddnsDomain?: string; ipv4?: string } = {
@@ -54,4 +54,36 @@ test("keeps IPv6 when it is the only usable address family", () => {
 test("recognizes bracketed and zone-scoped IPv6 addresses", () => {
   assert.equal(getEntryAddressFamily("[2001:db8::11]:443"), "ipv6");
   assert.equal(getEntryAddressFamily("fe80::1%eth0"), "ipv6");
+});
+
+test("standard cards retain IPv6 alternatives alongside the preferred domain or IPv4", () => {
+  for (const preferred of [
+    { label: "IPv4", value: "198.51.100.8" },
+    { label: "DDNS", value: "entry.example.com" },
+  ]) {
+    const entries = [preferred, { label: "IPv6", value: "2001:db8::8" }];
+    assert.deepEqual(filterRuleEntryAddressesForDisplay(entries, true), entries);
+    assert.deepEqual(filterRuleEntryAddressesForDisplay(entries), [preferred]);
+    assert.notEqual(filterRuleEntryAddressesForDisplay(entries, true), entries);
+  }
+});
+
+test("entry group alternatives add only distinct IPv6 addresses without changing the preferred entry", () => {
+  const preferred = [{ label: "入口组", value: "entry.example.com" }];
+  const candidates = [
+    { label: "IPv4", value: "198.51.100.8" },
+    { label: "DDNS", value: "host.example.com" },
+    { label: "IPv6", value: " 2001:db8::8 " },
+    { label: "IPv6", value: "2001:db8::8" },
+    { label: "IPv6", value: "2001:db8::9" },
+    { label: "IPv6", value: "" },
+  ];
+  const result = appendRuleEntryIpv6Addresses(preferred, candidates);
+  assert.deepEqual(result, [preferred[0],
+    { label: "IPv6", value: "2001:db8::8" },
+    { label: "IPv6", value: "2001:db8::9" },
+  ]);
+  assert.equal(preferred.length, 1);
+  assert.equal(candidates[2].value, " 2001:db8::8 ");
+  assert.deepEqual(appendRuleEntryIpv6Addresses(result, candidates), result);
 });

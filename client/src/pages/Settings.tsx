@@ -40,7 +40,7 @@ import { trpc } from "@/lib/trpc";
 import { getDockerUpgradeCommand, getPanelChangelogUrl, PANEL_UPGRADE_REFRESH_DELAY_SECONDS, type DockerUpgradeMethod } from "@/lib/panelUpgrade";
 import { compressImageFile, imageDataUrlSize } from "@/lib/imageUpload";
 import { downloadTextFile, type TextDownloadFile } from "@/lib/fileDownload";
-import { applyPersonalizationTheme } from "@/lib/personalizationTheme";
+import ThemeManagementCard from "@/components/ThemeManagementCard";
 import { cn } from "@/lib/utils";
 import {
   FORWARD_PROTOCOL_LABELS,
@@ -117,7 +117,6 @@ import { BRAND_LOGO_MAX_BYTES } from "@shared/avatar";
 import {
   BUILTIN_WALLPAPERS,
   DEFAULT_PERSONALIZATION_BACKGROUND,
-  PERSONALIZATION_THEME_PRESETS,
   clampBackgroundBlur,
   clampBackgroundOpacity,
   getPersonalizationThemePreset,
@@ -955,7 +954,7 @@ function PanelLogsSection() {
               {levelTabs.map((tab) => (
                 <TabsTrigger key={tab.value} value={tab.value} className="min-w-0 gap-1.5 text-xs">
                   {tab.label}
-                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">{tab.count}</span>
+                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[11px] text-muted-foreground">{tab.count}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -2234,6 +2233,7 @@ function TelegramBotSettingsCard() {
   const utils = trpc.useUtils();
   const { data: settings, isLoading } = trpc.system.getSettings.useQuery();
   const [telegramEnabled, setTelegramEnabled] = useState(false);
+  const [telegramLoginEnabled, setTelegramLoginEnabled] = useState(true);
   const [telegramBotTokenInput, setTelegramBotTokenInput] = useState("");
   const [telegramExpiryReminder, setTelegramExpiryReminder] = useState(false);
   const [telegramTrafficReminder, setTelegramTrafficReminder] = useState(false);
@@ -2244,6 +2244,7 @@ function TelegramBotSettingsCard() {
   useEffect(() => {
     if (settings) {
       setTelegramEnabled(!!settings.telegram?.enabled);
+      setTelegramLoginEnabled(settings.telegram?.loginEnabled !== false);
       const telegramReady = !!settings.telegram?.enabled && !!settings.telegram?.configured;
       setTelegramExpiryReminder(telegramReady && !!settings.telegram?.expiryReminder);
       setTelegramTrafficReminder(telegramReady && !!settings.telegram?.trafficReminder);
@@ -2256,6 +2257,8 @@ function TelegramBotSettingsCard() {
     onSuccess: () => {
       utils.system.getSettings.invalidate();
       toast.success(translateText("Telegram 机器人配置已保存"));
+      utils.system.publicInfo.invalidate();
+      utils.telegram.loginStatus.invalidate();
     },
     onError: (err) => toast.error(err.message || translateText("保存失败")),
   });
@@ -2280,6 +2283,7 @@ function TelegramBotSettingsCard() {
     updateSettingsMutation.mutate({
       telegram: {
         enabled: telegramEnabled,
+        loginEnabled: telegramLoginEnabled,
         botToken: nextToken || undefined,
         expiryReminder: remindersReady ? telegramExpiryReminder : false,
         trafficReminder: remindersReady ? telegramTrafficReminder : false,
@@ -2386,6 +2390,15 @@ function TelegramBotSettingsCard() {
               <AlertTitle>{translateText("快捷登录需要域名")}</AlertTitle>
               <AlertDescription>{translateText("在系统配置填写公开地址，并在 @BotFather 绑定同一域名。")}</AlertDescription>
             </Alert>
+            <div className="rounded-lg border border-border/40 bg-background/50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label htmlFor="telegram-login-enabled">{translateText("TG 登录")}</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">{translateText("默认开启；关闭后隐藏登录页的 Telegram 登录入口，不影响机器人 WebApp 直接登录。")}</p>
+                </div>
+                <Switch id="telegram-login-enabled" checked={telegramLoginEnabled} onCheckedChange={setTelegramLoginEnabled} />
+              </div>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               <div className="rounded-lg border border-border/40 bg-background/50 p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -2936,12 +2949,11 @@ function normalizePublicHostMonitorPathInput(value: string) {
     .toLowerCase();
 }
 
-type PersonalizationSaveKey = "title" | "logo" | "theme" | "background" | "homepage" | "sidebarPages";
+type PersonalizationSaveKey = "title" | "logo" | "background" | "homepage" | "sidebarPages";
 
 const personalizationSaveMessages: Record<PersonalizationSaveKey, string> = {
   title: translateText("网站标题已保存"),
   logo: translateText("Logo 已保存"),
-  theme: translateText("默认配色已保存"),
   background: translateText("自定义背景已保存"),
   homepage: translateText("公开首页已保存"),
   sidebarPages: translateText("自定义菜单已保存"),
@@ -2950,7 +2962,6 @@ const personalizationSaveMessages: Record<PersonalizationSaveKey, string> = {
 const personalizationSaveErrorMessages: Record<PersonalizationSaveKey, string> = {
   title: translateText("网站标题保存失败"),
   logo: translateText("Logo 保存失败"),
-  theme: translateText("默认配色保存失败"),
   background: translateText("自定义背景保存失败"),
   homepage: translateText("公开首页保存失败"),
   sidebarPages: translateText("自定义菜单保存失败"),
@@ -2968,7 +2979,6 @@ function PersonalizationSettingsSection() {
   const [siteTitleInput, setSiteTitleInput] = useState("ForwardX");
   const [siteLogoDataUrl, setSiteLogoDataUrl] = useState("");
   const [personalizationTheme, setPersonalizationTheme] = useState<PersonalizationThemePresetId>("ink");
-  const [savedPersonalizationTheme, setSavedPersonalizationTheme] = useState<PersonalizationThemePresetId>("ink");
   const [homepageEnabled, setHomepageEnabled] = useState(true);
   const [homepageCustomEnabled, setHomepageCustomEnabled] = useState(false);
   const [homepageHtml, setHomepageHtml] = useState("");
@@ -2992,7 +3002,6 @@ function PersonalizationSettingsSection() {
     setSiteLogoDataUrl(settings.siteLogoDataUrl || "");
     const nextTheme = normalizePersonalizationThemePresetId((settings as any).personalizationTheme);
     setPersonalizationTheme(nextTheme);
-    setSavedPersonalizationTheme(nextTheme);
     setHomepageEnabled(settings.homepageEnabled ?? true);
     setHomepageCustomEnabled(!!settings.homepageCustomEnabled);
     setHomepageHtml(settings.homepageHtml || "");
@@ -3006,10 +3015,6 @@ function PersonalizationSettingsSection() {
   const updateSettingsMutation = trpc.system.updateSettings.useMutation({
     onSuccess: async () => {
       const key = savingSectionRef.current;
-      if (key === "theme") {
-        setSavedPersonalizationTheme(personalizationTheme);
-        applyPersonalizationTheme(personalizationTheme);
-      }
       if (key === "sidebarPages" && pendingCustomSidebarPagesRef.current) {
         setCustomSidebarPages(pendingCustomSidebarPagesRef.current);
         setCustomSidebarDialogOpen(false);
@@ -3034,7 +3039,6 @@ function PersonalizationSettingsSection() {
 
   const personalizationSaving = updateSettingsMutation.isPending;
   const isSavingPersonalization = (key: PersonalizationSaveKey) => savingSection === key && personalizationSaving;
-  const themeDirty = personalizationTheme !== savedPersonalizationTheme;
   const savePersonalizationSection = (
     key: PersonalizationSaveKey,
     payload: Parameters<typeof updateSettingsMutation.mutate>[0],
@@ -3199,14 +3203,6 @@ function PersonalizationSettingsSection() {
       return;
     }
     savePersonalizationSection("logo", { siteLogoDataUrl });
-  };
-
-  const handleThemePresetSelect = (theme: PersonalizationThemePresetId) => {
-    setPersonalizationTheme(theme);
-  };
-
-  const handleSaveThemePreset = () => {
-    savePersonalizationSection("theme", { personalizationTheme });
   };
 
   const handleSaveBackground = () => {
@@ -3433,10 +3429,10 @@ function PersonalizationSettingsSection() {
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <p className="max-w-full truncate text-sm font-medium">{page.name}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
                         {page.visibility === "admin" ? translateText("仅管理员") : translateText("所有用户")}
                       </Badge>
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      <Badge variant="secondary" className="shrink-0 text-[11px]">
                         {page.openMode === "external" ? translateText("新窗口") : translateText("嵌入")}
                       </Badge>
                     </div>
@@ -3481,67 +3477,7 @@ function PersonalizationSettingsSection() {
         </CardContent>
       </Card>
 
-      <Card className="border-border/40 bg-card/60 backdrop-blur-md">
-        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1.5">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Palette className="h-4 w-4 text-primary" />{translateText("默认配色")}</CardTitle>
-            <CardDescription>{translateText("保存后应用于整个面板。")}</CardDescription>
-          </div>
-          <Button
-            type="button"
-            onClick={handleSaveThemePreset}
-            disabled={isSavingPersonalization("theme") || !themeDirty}
-            className="w-full gap-2 sm:w-auto"
-          >
-            {isSavingPersonalization("theme") && <Loader2 className="h-4 w-4 animate-spin" />}{translateText("保存配色")}</Button>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            {PERSONALIZATION_THEME_PRESETS.map((preset) => {
-              const active = personalizationTheme === preset.id;
-              const saving = isSavingPersonalization("theme") && active;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => handleThemePresetSelect(preset.id)}
-                  disabled={isSavingPersonalization("theme")}
-                  className={cn(
-                    "pearl-hover-card group flex min-h-32 flex-col justify-between rounded-lg border bg-background/50 p-3 text-left text-foreground hover:bg-primary/5 disabled:pointer-events-none disabled:opacity-70",
-                    active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-medium">{translateText(preset.name)}</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {translateText(preset.description)}
-                      </p>
-                    </div>
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-                      {saving ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      ) : active ? (
-                        <CheckCircle2 className="h-4 w-4 text-primary" />
-                      ) : null}
-                    </span>
-                  </div>
-                  <div className="mt-4 flex items-center gap-2">
-                    {preset.swatches.map((color) => (
-                      <span
-                        key={color}
-                        className="h-7 w-7 rounded-full border border-background shadow-sm ring-1 ring-border/60"
-                        style={{ backgroundColor: color }}
-                      />
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
+      <ThemeManagementCard />
 
       <Card className="border-border/40 bg-card/60 backdrop-blur-md">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -4896,7 +4832,7 @@ function SystemInfoSection() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium">{translateText("服务器文件路径")}</p>
-                      <Badge variant={panelSslPathActive ? "default" : "outline"} className="text-[10px]">
+                      <Badge variant={panelSslPathActive ? "default" : "outline"} className="text-[11px]">
                         {panelSslPathActive ? translateText("当前使用") : panelSslPathConfigured ? translateText("已保存备用") : translateText("未配置")}
                       </Badge>
                     </div>
@@ -4950,7 +4886,7 @@ function SystemInfoSection() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium">{translateText("粘贴 PEM 内容")}</p>
-                      <Badge variant={panelSslPemActive ? "default" : "outline"} className="text-[10px]">
+                      <Badge variant={panelSslPemActive ? "default" : "outline"} className="text-[11px]">
                         {panelSslPemActive ? translateText("当前使用") : panelSslPemConfigured ? translateText("已保存备用") : translateText("未配置")}
                       </Badge>
                     </div>
@@ -5539,7 +5475,7 @@ function SystemInfoSection() {
               <div className="col-span-full flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-muted/20 p-3 @min-[38rem]/panel-upgrade:col-span-1">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{translateText("自动检查更新")}</p>
-                  <p className="text-xs text-muted-foreground">{translateText("开启后定期检查面板和 Agent 更新。")}</p>
+                  <p className="text-xs text-muted-foreground">{translateText("访问后台时检查面板和 Agent 更新，30 分钟内复用结果。")}</p>
                 </div>
                 <OptimisticSwitch
                   className="shrink-0"

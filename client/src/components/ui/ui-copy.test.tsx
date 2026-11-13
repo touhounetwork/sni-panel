@@ -10,6 +10,24 @@ import { PersistentPagination, type PersistentPaginationState } from "../Persist
 import { RuleLimitsForm, newRuleLimitsForm } from "../rules/RuleLimitsForm";
 import { getLanguagePreference, initializeLanguage, setLanguagePreference } from "@/i18n";
 
+test("speed unit suffixes stay compact and opt out of browser translation", () => {
+  for (const name of ["ForwardGroups", "Users"]) {
+    const source = readFileSync(`client/src/pages/${name}.tsx`, "utf8");
+    assert.match(source, /<span translate="no" className="notranslate[^\"]*">Mbps<\/span>/);
+    assert.doesNotMatch(source, /每秒兆比特|兆比特数/);
+  }
+});
+
+test("group DDNS offers both address families and only shows CNAME for saved legacy selections", () => {
+  const page = readFileSync("client/src/pages/ForwardGroups.tsx", "utf8");
+  assert.match(page, /<SelectItem value="A">IPv4 \/ A<\/SelectItem>/);
+  assert.match(page, /<SelectItem value="AAAA">IPv6 \/ AAAA<\/SelectItem>/);
+  assert.match(page, /<SelectItem value="BOTH">A \+ AAAA<\/SelectItem>/);
+  assert.match(page, /form\.recordType === "CNAME" && <SelectItem value="CNAME">/);
+  assert.match(page, /_160px/);
+  assert.match(page, /forwardGroupDdnsHostValue\(host, form\.recordType\)/);
+});
+
 test("operations monitor is display-only and sits below the other dashboard sections", () => {
   const page = readFileSync("client/src/pages/Operations.tsx", "utf8");
   const filters = page.indexOf("<OperationsDateFilter ");
@@ -194,6 +212,6 @@ test("financial status badges and positive balances adapt to dark mode", () => {
   for (const name of ['Wallet', 'Billing']) {
     const source = readFileSync(`client/src/pages/${name}.tsx`, 'utf8');
     assert.match(source, /text-emerald-600 dark:text-emerald-400/);
-    assert.match(source, /<Badge variant=\{item\.status[^}]*\? "default" : "secondary"\}/);
+    assert.match(source, /<Badge\b[^>]*\bvariant=\{item\.status[^}]*\? "default" : "secondary"\}/);
   }
 });

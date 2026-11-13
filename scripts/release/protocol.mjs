@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { baseline, groups } from '../verify.mjs';
 
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-export const requiredFiles = version => [`forwardx-panel-v${version}.tar.gz`, 'forwardx-agent-linux-amd64', 'forwardx-fxp-linux-amd64', 'forwardx-runtime-linux-amd64', 'SHA256SUMS', 'THIRD_PARTY_NOTICES.md', `forwardx-docs-v${version}.tar.gz`, 'verification.tar.gz', 'RELEASE_NOTES.md'];
+export const requiredFiles = version => [`forwardx-panel-v${version}.tar.gz`, 'forwardx-agent-linux-amd64', 'forwardx-fxp-linux-amd64', 'forwardx-runtime-linux-amd64', 'RUNTIME_BUILD.txt', 'RUNTIME_LICENSE.txt', 'SHA256SUMS', 'THIRD_PARTY_NOTICES.md', `forwardx-docs-v${version}.tar.gz`, 'verification.tar.gz', 'RELEASE_NOTES.md'];
 export function validateEvidence(records, commit, image) {
   for (const name of [...Object.keys(groups), 'bundle', 'image']) {
     const record = records.find(item => item.group === name);

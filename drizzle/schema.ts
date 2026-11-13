@@ -248,6 +248,8 @@ export const hosts = table("hosts", {
   preferredIpv6: text("preferredIpv6"),
   hostType: varchar("hostType", { length: 32 }).notNull().default("slave"), // 'master' | 'slave'
   agentToken: text("agentToken"),
+  agentPanelUrlEnabled: boolean("agentPanelUrlEnabled").notNull().default(false),
+  agentPanelUrl: text("agentPanelUrl"),
   agentInstallationId: varchar("agentInstallationId", { length: 64 }),
   // 用户自定义的入口 IP/域名，为空时回退使用 ip
   entryIp: text("entryIp"),
@@ -1051,6 +1053,7 @@ export const paymentOrders = table("payment_orders", {
   merchantIdentity: text("merchantIdentity"), // Non-secret merchant/app snapshot; never signing keys.
   failureReason: text("failureReason"),
   lastPaymentCheckAt: epoch("lastPaymentCheckAt"),
+  adminDismissedAt: epoch("adminDismissedAt"),
   expiresAt: epoch("expiresAt"),
   paidAt: epoch("paidAt"),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
@@ -1071,6 +1074,7 @@ export const subscriptionPlans = table("subscription_plans", {
   durationDays: int("durationDays").notNull().default(30),
   portCount: int("portCount").notNull().default(20),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
+  trafficMode: varchar("trafficMode", { length: 16 }).notNull().default("both"),
   rateLimitMbps: int("rateLimitMbps").notNull().default(0),
   maxRules: int("maxRules").notNull().default(20),
   maxConnections: int("maxConnections").notNull().default(2000),

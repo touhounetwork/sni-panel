@@ -34,6 +34,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { hostThemeValues, type ThemeValues } from "@shared/themeFields";
+import { hostNetworkSpeed, stampHostNetworkMetrics } from "@shared/hostNetworkSpeed";
+import type { ThemeViews } from "@shared/themeViews";
+import ThemeBlocks from "@/components/themes/ThemeBlocks";
 import {
   formatBytes,
   formatUptime,
@@ -107,6 +111,8 @@ type HostCardProps = {
   compact?: boolean;
   dragHandle?: ReactNode;
   sortableClassName?: string;
+  theme?: ThemeViews["hosts"];
+  themeValues?: ThemeValues;
 };
 
 type HostActionButtonsProps = Pick<
@@ -143,7 +149,7 @@ export function HostActionButtons({
   };
 
   return (
-    <div className={className}>
+    <div data-theme-part="host-actions" className={className}>
       {onViewProbeLatency && (
         <Button
           variant="ghost"
@@ -233,11 +239,17 @@ export default function HostCard({
   compact = false,
   dragHandle,
   sortableClassName,
+  theme,
+  themeValues,
 }: HostCardProps) {
   const hasExternalMetrics = externalMetrics !== undefined;
-  const { data: queriedMetrics } = trpc.hosts.metrics.useQuery(
+  const { data: queriedMetricResponse, dataUpdatedAt: metricReceivedAt } = trpc.hosts.metrics.useQuery(
     { hostId: host.id, limit: 2, live: !!refreshInterval },
     { enabled: !hasExternalMetrics, refetchInterval: hasExternalMetrics ? false : refreshInterval }
+  );
+  const queriedMetrics = useMemo(
+    () => queriedMetricResponse ? stampHostNetworkMetrics(queriedMetricResponse, metricReceivedAt) : undefined,
+    [queriedMetricResponse, metricReceivedAt],
   );
   const metrics = hasExternalMetrics ? externalMetrics : queriedMetrics;
   const cachedMetrics = useMemo(() => readCachedHostMetrics(host.id), [host.id]);
@@ -265,7 +277,7 @@ export default function HostCard({
     : `${formatBytes(trafficUsedBytes)} / ${formatBytes(trafficLimit)} (${trafficPercent}%)`;
   const trafficUsageTooltip = [
     translateText("流量使用（{0}）", [trafficMeasureModeLabel]),
-    translateText("入站 {0} / 出站 {1}", [totalNetworkIn === null ? "--" : formatBytes(totalNetworkIn), totalNetworkOut === null ? "--" : formatBytes(totalNetworkOut)]),
+    translateText("入向 {0} / 出向 {1}", [totalNetworkIn === null ? "--" : formatBytes(totalNetworkIn), totalNetworkOut === null ? "--" : formatBytes(totalNetworkOut)]),
     trafficUsageLabel,
   ].join("\n");
   const memoryUsed = latestMetric?.memoryUsed == null ? null : Number(latestMetric.memoryUsed);
@@ -292,22 +304,7 @@ export default function HostCard({
       ? `Swap ${formatBytes(swapUsed ?? 0)} / ${formatBytes(swapTotal ?? 0)} (${swapUsage}%)`
       : translateText("Swap 未上报"),
   ].join("\n");
-  const networkSpeed = useMemo(() => {
-    if (!latestMetric) return { in: null as number | null, out: null as number | null };
-    if (latestMetric.networkSpeedIn != null || latestMetric.networkSpeedOut != null) {
-      return {
-        in: latestMetric.networkSpeedIn == null ? null : Number(latestMetric.networkSpeedIn),
-        out: latestMetric.networkSpeedOut == null ? null : Number(latestMetric.networkSpeedOut),
-      };
-    }
-    if (!previousMetric) return { in: null as number | null, out: null as number | null };
-    const latestAt = new Date(latestMetric.recordedAt).getTime();
-    const previousAt = new Date(previousMetric.recordedAt).getTime();
-    const seconds = Math.max(1, (latestAt - previousAt) / 1000);
-    const inDelta = Math.max(0, Number(latestMetric.networkIn || 0) - Number(previousMetric.networkIn || 0));
-    const outDelta = Math.max(0, Number(latestMetric.networkOut || 0) - Number(previousMetric.networkOut || 0));
-    return { in: inDelta / seconds, out: outDelta / seconds };
-  }, [latestMetric, previousMetric]);
+  const networkSpeed = hostNetworkSpeed(latestMetric, previousMetric, { isOnline: !!host.isOnline });
   const systemNetworkIn = metricBytesOrNull(latestMetric?.networkIn);
   const systemNetworkOut = metricBytesOrNull(latestMetric?.networkOut);
   const systemNetworkTotal = systemNetworkIn === null && systemNetworkOut === null ? null : (systemNetworkIn ?? 0) + (systemNetworkOut ?? 0);
@@ -383,8 +380,8 @@ export default function HostCard({
       ? "h-1.5 bg-muted [&>div]:bg-muted-foreground/30"
       : "h-1.5 bg-muted [&>div]:bg-muted-foreground/20";
   const infoPanelClass = isOnline
-    ? "pearl-readout border-border/40"
-    : "border-muted-foreground/20 bg-muted/25";
+    ? "pearl-readout border-transparent"
+    : "border-transparent bg-muted/30";
   const trafficPanelClass = isOnline
     ? "border-border/40 bg-muted/20"
     : "border-muted-foreground/20 bg-muted/25";
@@ -454,8 +451,22 @@ export default function HostCard({
     writeCachedHostMetrics(host.id, metrics);
   }, [host.id, metrics]);
 
+  if (theme?.card) {
+    const actions = <div data-theme-part="host-actions">
+      <div className="flex min-w-0 items-center gap-2"><span className="sr-only">{hostName}</span>{dragHandle}</div>
+      <HostActionButtons host={host} onEdit={onEdit} onDelete={onDelete} onUpgrade={onUpgrade} onResetTraffic={onResetTraffic} onCorrectTraffic={onCorrectTraffic} onViewProbeLatency={onViewProbeLatency} resetTrafficPending={resetTrafficPending} canUpgrade={canUpgrade} />
+    </div>;
+    return <Card data-theme-host-card="true" data-theme-host-status={isOnline ? "online" : "offline"} data-theme-card-mode={compact ? "compact" : "standard"} aria-label={hostName} className={cn("host-card-shell min-w-0 overflow-hidden border-border/40 bg-card/60", dragHandle && "group/sortable", sortableClassName)}>
+      {theme.actionsPlacement !== "footer" && <CardHeader className="pb-2">{actions}</CardHeader>}
+      <CardContent data-theme-part="host-card" className={theme.actionsPlacement === "footer" ? "pt-6" : undefined}>
+        <ThemeBlocks node={theme.card} values={{ ...themeValues, ...hostThemeValues(host, displayMetrics, traffic) }} />
+      </CardContent>
+      {theme.actionsPlacement === "footer" && <div className="px-6 pb-4">{actions}</div>}
+    </Card>;
+  }
+
   return (
-    <Card interactive={isOnline} className={`${cardMinHeightClass} host-card-shell ${dragHandle ? "group/sortable" : ""} ${sortableClassName || ""} transition-[min-height,border-color,background-color,box-shadow,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+    <Card interactive={isOnline} data-theme-host-card="true" data-theme-host-status={isOnline ? "online" : "offline"} data-theme-card-mode={compact ? "compact" : "standard"} className={`${cardMinHeightClass} host-card-shell ${dragHandle ? "group/sortable" : ""} ${sortableClassName || ""} transition-[min-height,border-color,background-color,box-shadow,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
       isOnline
         ? "border-border/40 bg-card/60 hover:border-border/60"
         : "border-muted-foreground/20 bg-muted/35 shadow-none hover:border-muted-foreground/30"
@@ -499,7 +510,7 @@ export default function HostCard({
           </div>
         )}
       </CardHeader>
-      <CardContent className={`host-card-mode-content ${compact ? "host-card-mode-content-compact space-y-2 px-3.5 pb-3.5" : "host-card-mode-content-standard space-y-3"} ${isOnline ? "" : "text-muted-foreground"}`}>
+      <CardContent data-theme-part="host-card" className={`host-card-mode-content ${compact ? "host-card-mode-content-compact space-y-2 px-3.5 pb-3.5" : "host-card-mode-content-standard space-y-3"} ${isOnline ? "" : "text-muted-foreground"}`}>
         {compact ? (
           <div className="space-y-2">
             <div className={`min-w-0 rounded-md border px-2.5 py-1.5 ${infoPanelClass}`}>
@@ -510,19 +521,19 @@ export default function HostCard({
                 />
                 <span className="min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
                 <span
-                  className={`shrink-0 rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none text-muted-foreground ${
+                  className={`shrink-0 rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[11px] font-normal leading-none text-muted-foreground ${
                     isOnline ? "border-border/50" : "border-muted-foreground/20 bg-muted/20"
                   }`}
                 >
                   {host.agentVersion ? `v${host.agentVersion}` : translateText("未上报")}
                 </span>
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[10px] text-amber-500">{translateText("新版")}</Badge>
+                  <Badge variant="outline" className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[11px] text-amber-500">{translateText("新版")}</Badge>
                 )}
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[11px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
                     {agentUpgradeTimedOut ? translateText("升级失败") : translateText("升级中")}
                   </Badge>
                 </div>
@@ -540,19 +551,19 @@ export default function HostCard({
                 />
                 <span className="min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
                 <span
-                  className={`shrink-0 rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none text-muted-foreground ${
+                  className={`shrink-0 rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[11px] font-normal leading-none text-muted-foreground ${
                     isOnline ? "border-border/50" : "border-muted-foreground/20 bg-muted/20"
                   }`}
                 >
                   {host.agentVersion ? `v${host.agentVersion}` : translateText("未上报")}
                 </span>
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[10px] text-amber-500">{translateText("新版")}</Badge>
+                  <Badge variant="outline" className="shrink-0 border-amber-500/30 px-1.5 py-0 text-[11px] text-amber-500">{translateText("新版")}</Badge>
                 )}
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[11px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
                     {agentUpgradeTimedOut ? translateText("升级失败") : translateText("升级中")}
                   </Badge>
                 </div>
@@ -601,7 +612,7 @@ export default function HostCard({
                 <Clock className="h-3 w-3 text-muted-foreground" />
                 <span className="text-muted-foreground">{translateText("运行")}</span>
                 {remainingTimeLabel && (
-                  <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}>
+                  <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] font-medium leading-none ${remainingTimeClass}`}>
                     {remainingTimeLabel}
                   </span>
                 )}
@@ -668,7 +679,7 @@ export default function HostCard({
               <Clock className="h-3 w-3 text-muted-foreground" />
               <span className="text-muted-foreground">{translateText("运行时间")}</span>
               {remainingTimeLabel && (
-                <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}>
+                <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] font-medium leading-none ${remainingTimeClass}`}>
                   {remainingTimeLabel}
                 </span>
               )}
@@ -677,7 +688,7 @@ export default function HostCard({
           </div>
           )
         ) : (
-          <div className={`border-t border-border/30 text-center text-muted-foreground/60 ${compact ? "py-3" : "py-4"}`}>
+          <div className={`border-t border-border/30 text-center text-muted-foreground/80 ${compact ? "py-3" : "py-4"}`}>
             <p className="text-xs">{translateText("暂无监控数据")}</p>
           </div>
         )}

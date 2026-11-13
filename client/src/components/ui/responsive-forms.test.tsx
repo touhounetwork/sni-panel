@@ -25,7 +25,9 @@ test("short numbers stay paired while date/time fields wrap when their container
   assert.equal((html.match(/type="time"/g) || []).length, 2);
   const health = renderToStaticMarkup(<HostChinaHealthSettings value={{ ...createChinaHealthDraft(), enabled: true, notify: false }} onChange={() => {}} />);
   assert.match(health, /grid min-w-0 grid-cols-2 gap-2\.5/);
-  assert.equal((health.match(/type="number"/g) || []).length, 5);
+  const thresholds = health.slice(0, health.indexOf("<fieldset"));
+  assert.equal((thresholds.match(/type="number"/g) || []).length, 5);
+  assert.match(health, /id="china-hook-timeout"[^>]*min="5" max="30"/);
 });
 
 test("shutdown thresholds move below the header in narrow cards and inline in wide cards", () => {
@@ -189,7 +191,7 @@ test("metered resource editor keeps both switches inside its own scroll body", (
 
 test("mobile dashboard pairs inbound/outbound cards and lays out personal consumption as two by two", () => {
   const home = source("pages/Home.tsx");
-  const traffic = section("pages/Home.tsx", 'title={translateText("入站流量")}', '<MobileAppSettings');
+  const traffic = section("pages/Home.tsx", 'title={translateText("入向流量")}', '<MobileAppSettings');
   assert.doesNotMatch(traffic, /col-span-2/);
   assert.match(home, /className=\{isAdmin \? undefined : "col-span-2 lg:col-span-1"\}/);
   const consumption = section("pages/Home.tsx", 'translateText("我的消耗")', 'translateText("我的账户状态")');

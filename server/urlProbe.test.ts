@@ -43,7 +43,7 @@ test("MySQL and PostgreSQL upgrades add URL probe fields with safe defaults", as
     };
     await ensureDatabaseSchema(pool as any);
     const quote = kind === "mysql" ? "`" : '"';
-    for (const field of fields) assert.ok(queries.some(sql => sql.startsWith(`ALTER TABLE ${quote}host_probe_services${quote} ADD COLUMN ${quote}${field}${quote}`)), `${kind} upgrades ${field}`);
+    for (const field of fields) assert.ok(queries.some(sql => sql.startsWith(`ALTER TABLE ${quote}host_probe_services${quote} ADD COLUMN ${kind === "postgresql" ? "IF NOT EXISTS " : ""}${quote}${field}${quote}`)), `${kind} upgrades ${field}`);
   }
 });
 

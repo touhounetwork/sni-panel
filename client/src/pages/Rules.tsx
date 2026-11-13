@@ -17,6 +17,7 @@ import { formatRuleTraffic } from "@/lib/ruleTrafficDisplay";
 import { RuleGroupBar, RuleGroupMultiSelect, RuleGroupBulkEditor, RuleGroupBulkPagination, RuleGroupBulkApplyButton, useRuleGroupBulkEditor } from "@/components/rules/PersonalRuleGroups";
 import { RuleCardControls } from "@/components/rules/RuleCardControls";
 import { RulePersonalGroupBadges } from "@/components/rules/RulePersonalGroupBadges";
+import { RuleBatchHostSummary } from "@/components/rules/RuleBatchHostSummary";
 import { RuleCardMetadata } from "@/components/rules/RuleCardMetadata";
 import { useRuleTableLayout } from "@/hooks/useRuleTableLayout";
 import { ruleTableColumns, type RuleTableColumnId } from "@shared/ruleTableLayout";
@@ -27,9 +28,12 @@ import { forwardGroupRouteMembers, forwardGroupSelfTestSource } from "../../../s
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import UserSelect from "@/components/UserSelect";
+import { MobileFilterToggle, mobileFilterPanelClass } from "@/components/MobileFilterToggle";
+import { SummaryToggle, useSummaryCollapsed } from "@/components/SummaryToggle";
 import { ruleOwnerOptionIds } from "@/lib/userSelection";
 import { migrateStoredRulePageSize } from "@/lib/rulePageSize";
 import { isCompleteRuleSortScope } from "@/lib/ruleSortScope";
+import { portEntryProbeHosts } from "@/lib/portEntryProbePlan";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
@@ -126,6 +130,7 @@ import {
 } from "@/lib/ruleTransfer";
 import { parseCompatibleRuleTransferText, validateNyanpassImportTarget, type CompatibleRuleFile } from "@/lib/nyanpassImport";
 import {
+  appendRuleEntryIpv6Addresses,
   filterRuleEntryAddressesForDisplay,
   getEntryAddressFamily as addressFamily,
   resolveRuleEntryHost,
@@ -134,6 +139,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ruleBatchStages, ruleBatchCanAdvance, ruleBatchCategory, ruleBatchModes, ruleBatchModeAvailable, ruleCopySelectionKey, remainingRuleCopyJobs, ruleCopyRetries, type RuleBatchManageMode } from "@/lib/ruleBatchFlow";
 import { RuleTaskOutcomeUnknownError } from "../../../shared/ruleTaskOutcome";
+import { getRuleBatchEntryHosts, matchesRuleBatchHost, ruleBatchHostLabel, ruleBatchHostOptions } from "@/lib/ruleBatchHosts";
 import {
   Plus,
   Trash2,
@@ -212,6 +218,7 @@ import {
 } from "@/lib/sniRuleForm";
 import {
   addHostNodeMeta,
+  addTunnelHostNodeMeta,
   addNodeMetaAliases,
   findHostByAddress,
   hostDisplayName,
@@ -1904,8 +1911,8 @@ function RuleTrafficGlobe({
           </div>}
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
             {globeData.summaries.slice(0, 50).map((item, index) => <button type="button" key={item.rule.id} className="globe-list-row" data-active={selectedRoute?.rule.id === item.rule.id} aria-pressed={selectedRoute?.rule.id === item.rule.id} onClick={() => { setSelectedRuleId(Number(item.rule.id)); if (item.routePoints[0]) scene.focus(item.routePoints[0]); }}>
-              <div className="flex min-w-0 items-center gap-2"><span className="w-4 shrink-0 text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 truncate text-xs font-medium">{item.rule.name || translateText("规则 #{0}", [item.rule.id])}</span><span className="shrink-0 text-[11px] tabular-nums">{formatBytes(item.totalBytes)}</span></div>
-              <div className="ml-6 mt-1 truncate font-mono text-[10px] text-muted-foreground">{item.targetText}</div>
+              <div className="flex min-w-0 items-center gap-2"><span className="w-4 shrink-0 text-[11px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 truncate text-xs font-medium">{item.rule.name || translateText("规则 #{0}", [item.rule.id])}</span><span className="shrink-0 text-[11px] tabular-nums">{formatBytes(item.totalBytes)}</span></div>
+              <div className="ml-6 mt-1 truncate font-mono text-[11px] text-muted-foreground">{item.targetText}</div>
               <div className="ml-6 mt-2 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full" style={{ width: `${totalTraffic ? Math.max(2, item.totalBytes / totalTraffic * 100) : 0}%`, backgroundColor: item.color }} /></div>
             </button>)}
             {globeData.summaries.length === 0 && <p className="px-2 py-8 text-center text-xs text-muted-foreground">{translateText("暂无可定位流量路径")}</p>}
@@ -2201,6 +2208,8 @@ function RulesContent() {
       ? "all" : normalizeRuleResourceFilter(getStoredString(filterResourceStorageKey, "all"))
   ));
   const [ruleResourceMenuOpen, setRuleResourceMenuOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [summaryCollapsed, setSummaryCollapsed] = useSummaryCollapsed("rules");
   const [ruleResourceMenuType, setRuleResourceMenuType] = useState<RuleTransferScopeType>(
     parseRuleResourceFilter(getStoredString(filterResourceStorageKey, "all")).type || "local",
   );
@@ -2264,13 +2273,20 @@ function RulesContent() {
     : undefined;
   const [portStatus, setPortStatus] = useState<"idle" | "checking" | "available" | "used">("idle");
   const [portRangeError, setPortRangeError] = useState<string | null>(null);
+  const [portConfigurationError, setPortConfigurationError] = useState<string | null>(null);
   const latestPortCheckRef = useRef(0);
   const [sniToggle, setSniToggle] = useState<SniToggleState>(closedSniToggleState);
   const [sniDomainConflict, setSniDomainConflict] = useState<string | null>(null);
   const latestSniCheckRef = useRef(0);
+  const latestRandomPortRef = useRef(0);
   const [copyRuleIds, setCopyRuleIds] = useState<number[]>([]);
   const [copyRuleSearch, setCopyRuleSearch] = useState("");
   const [copyRuleCategory, setCopyRuleCategory] = useState<RuleCategory>("all");
+  const [copyRuleHostId, setCopyRuleHostId] = useState("all");
+  useEffect(() => {
+    setCopyRuleHostId("all");
+    setCopyRuleIds([]);
+  }, [filterUser, user?.id]);
   const [copyRulePersonalGroupId, setCopyRulePersonalGroupId] = useState<number | null>(null);
   useEffect(() => {
     if (!copyRulePersonalGroupId || !personalGroupsQuery.data) return;
@@ -2802,6 +2818,7 @@ function RulesContent() {
     setCopyManageMode(transferSourceRules.length ? "operate" : "import");
     setBatchEditForm(buildEmptyBatchEditForm());
     setCopyRuleCategory(initialRuleIds ? "all" : ruleCategory);
+    setCopyRuleHostId("all");
     setCopyRulePersonalGroupId(isOwnRuleScope ? activePersonalGroupId : null);
     setCopyRuleSearch(initialRuleIds ? "" : ruleSearchQuery);
     const preferredCopyTargetScope: RuleTransferScopeType = canUseSavedLocalForward
@@ -2970,9 +2987,7 @@ function RulesContent() {
     if (portStatus === "used") {
       return {
         type: "used" as const,
-        // The reason may be any conflict (e.g. a duplicate SNI); only range
-        // violations read as "out of range".
-        text: portRangeError && /必须在/.test(portRangeError) ? translateText("超范围") : translateText("不可用"),
+        text: portRangeError && /必须在.*(?:范围|区间)|must be.*range/i.test(portRangeError) ? translateText("超范围") : translateText("不可用"),
         title: portRangeError || translateText("端口已被占用"),
       };
     }
@@ -3334,6 +3349,7 @@ function RulesContent() {
       return;
     }
     setPortRangeError(null);
+    setPortConfigurationError(null);
     setPortStatus("checking");
     try {
       const result = await utils.rules.checkPort.fetch({
@@ -3346,19 +3362,22 @@ function RulesContent() {
         protocol: effectiveFormProtocol,
         forwardType: effectiveRouteForwardType,
         sni,
-      });
+      }, { staleTime: 0 });
       if (latestPortCheckRef.current !== checkId) return;
-      setPortRangeError(result.used ? ("reason" in result ? result.reason : null) ?? null : null);
+      setPortRangeError(result.used ? result.reason ?? null : null);
+      setPortConfigurationError(result.configurationError ?? null);
       setPortStatus(result.used ? "used" : "available");
-    } catch {
+    } catch (err: any) {
       if (latestPortCheckRef.current !== checkId) return;
       setPortStatus("idle");
+      setPortConfigurationError(err?.message || translateText("端口检查失败，请重试"));
     }
   }, [form.forwardGroupId, form.hostId, form.sni, effectiveFormProtocol, effectiveRouteForwardType, form.routeMode, form.sourcePort, form.tunnelId, editingId, utils, createOwnerUserId, isForwardGroupRouteMode, sniModeOn]);
 
   // A response started for the previous route must not mark the new route occupied.
   useEffect(() => {
     latestPortCheckRef.current += 1;
+    latestRandomPortRef.current += 1;
     setPortStatus("idle");
   }, [editingId, form.forwardGroupId, form.hostId, effectiveFormProtocol, effectiveRouteForwardType, form.routeMode, form.sourcePort, form.tunnelId, createOwnerUserId, isForwardGroupRouteMode, sniModeOn]);
 
@@ -3468,15 +3487,24 @@ function RulesContent() {
       toast.error(translateText("请先选择主机"));
       return;
     }
+    const requestId = ++latestRandomPortRef.current;
     try {
       const randomPortInput = isForwardGroupRouteMode
         ? { forwardGroupId: Number(form.forwardGroupId), excludeRuleId: editingId || undefined, protocol: effectiveFormProtocol }
         : { hostId: Number(form.hostId), tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null, excludeRuleId: editingId || undefined, protocol: effectiveFormProtocol };
-      const result = await utils.rules.randomPort.fetch({ ...randomPortInput, userId: editingId ? undefined : createOwnerUserId });
-      setForm({ ...form, sourcePort: result.port });
-      setPortStatus("idle");
+      const result = await utils.rules.randomPort.fetch({ ...randomPortInput, userId: editingId ? undefined : createOwnerUserId }, { staleTime: 0 });
+      if (latestRandomPortRef.current !== requestId) return;
+      latestPortCheckRef.current += 1;
+      setForm(prev => ({ ...prev, sourcePort: result.port }));
+      setPortRangeError(null);
+      setPortConfigurationError(null);
+      setPortStatus("available");
       toast.success(translateText("已分配随机端口: {0}", [result.port]));
+      // A one-port range (or repeated random result) does not change the
+      // effect dependencies, so explicitly refresh its diagnostics as well.
+      if (result.port === form.sourcePort) void checkPort();
     } catch (err: any) {
+      if (latestRandomPortRef.current !== requestId) return;
       toast.error(err.message || translateText("无法获取随机端口"));
     }
   };
@@ -4073,6 +4101,12 @@ function RulesContent() {
     ? (fullRulesQuery.data as any[] | undefined) || []
     : baseScopedRules;
   const transferSourceRules = useMemo(() => transferSourceRuleCandidates.filter((rule: any) => user?.role === "admin" || !isAdminManagedRule(rule)), [transferSourceRuleCandidates, user?.role]);
+  const copyRuleEntryHosts = useMemo(() => new Map<number, ReturnType<typeof getRuleBatchEntryHosts>>(
+    transferSourceRules
+      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && isRuleSupported(rule))
+      .map((rule: any) => [Number(rule.id), getRuleBatchEntryHosts(rule, { hostById, tunnelById, forwardGroupById })]),
+  ), [transferSourceRules, isRuleSupported, hostById, tunnelById, forwardGroupById]);
+  const copyRuleHostOptions = useMemo(() => ruleBatchHostOptions(copyRuleEntryHosts), [copyRuleEntryHosts]);
   const copyableSourceRules = useMemo(() => {
     const batchFilters: RuleFilterState = {
       ...ruleFilters,
@@ -4084,13 +4118,15 @@ function RulesContent() {
     return transferSourceRules
       .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && isRuleSupported(rule))
       .filter((rule: any) => matchesPersonalRuleGroup(rule.personalGroupIds, isOwnRuleScope ? copyRulePersonalGroupId : null))
+      .filter((rule: any) => matchesRuleBatchHost(copyRuleEntryHosts.get(Number(rule.id)) || [], copyRuleHostId))
       .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters));
-  }, [copyRuleCategory, copyRulePersonalGroupId, isOwnRuleScope, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
+  }, [copyRuleCategory, copyRulePersonalGroupId, isOwnRuleScope, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules, copyRuleEntryHosts, copyRuleHostId]);
   const copySelectedRules = useMemo(() => {
     const selected = new Set(copyRuleIds.map(Number));
     return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
+      && matchesRuleBatchHost(copyRuleEntryHosts.get(Number(rule.id)) || [], copyRuleHostId)
       && matchesPersonalRuleGroup(rule.personalGroupIds, isOwnRuleScope ? copyRulePersonalGroupId : null));
-  }, [copyRuleIds, copyRulePersonalGroupId, isOwnRuleScope, transferSourceRules]);
+  }, [copyRuleIds, copyRulePersonalGroupId, isOwnRuleScope, transferSourceRules, copyRuleEntryHosts, copyRuleHostId]);
   const copyTargetResources = useMemo(() => {
     if (copyTargetScopeType === "local") return availablePortForwardGroups;
     if (copyTargetScopeType === "tunnel") return supportedTunnels;
@@ -4179,6 +4215,18 @@ function RulesContent() {
         </div>
       </div>
       <div className="grid gap-2">
+        <Select value={copyRuleHostId} disabled={copyActionPending} onValueChange={(value) => {
+          setCopyRuleHostId(value);
+          setCopyRuleIds([]);
+        }}>
+          <SelectTrigger className="h-9 min-w-0 text-xs" aria-label={translateText("入口主机")}><SelectValue /></SelectTrigger>
+          <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]">
+            <SelectItem value="all">{translateText("所有主机")}</SelectItem>
+            {copyRuleHostOptions.map((host) => <SelectItem key={host.id} value={String(host.id)} className="[&>span:last-child]:min-w-0 [&>span:last-child]:flex-1">
+              <span className="block truncate" title={ruleBatchHostLabel(host)}>{ruleBatchHostLabel(host)}</span>
+            </SelectItem>)}
+          </SelectContent>
+        </Select>
         <div className={cn("grid min-w-0 gap-2", isOwnRuleScope && "grid-cols-2")}>
           <Select value={copyRuleCategory} onValueChange={(value) => setCopyRuleCategory(value as RuleCategory)} disabled={copyActionPending}>
             <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
@@ -4269,8 +4317,9 @@ function RulesContent() {
                 <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                   {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
                   <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
-                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">{desktopRuleTypeLabels[category]}</Badge>
+                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                 </span>
+                <RuleBatchHostSummary hosts={copyRuleEntryHosts.get(Number(rule.id)) || []} />
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
                   :{rule.sourcePort} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}
                 </span>
@@ -4782,7 +4831,7 @@ function RulesContent() {
   };
   const getHostOptionName = (host: any) => host?.name || translateText("主机 #{0}", [host?.id || "-"]);
   const renderTrafficBillingResourceBadge = (enabled = true) => enabled ? (
-    <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300">{translateText("按量计费资源")}</span>
+    <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-amber-700 dark:text-amber-300">{translateText("按量计费资源")}</span>
   ) : null;
   const getHostOptionText = (host: any) => translateText("{0}（{1}）{2}", [getHostOptionName(host), host?.isOnline ? translateText("在线") : translateText("离线"), trafficBillingHostIds.has(Number(host?.id)) ? translateText(" / 按量计费资源") : ""]);
   const renderHostStatusLabel = (host: any) => {
@@ -5137,24 +5186,12 @@ function RulesContent() {
       return { nodeMeta: meta, sourceLabel: selfTestRule?.name || translateText("源节点"), targetLabel: selfTestRule?.name || translateText("目标"), plannedSegments: [] as LinkTestPlannedSegment[] };
     }
 
-    const hostById = new Map<number, any>((hosts || []).map((host: any) => [Number(host.id), host]));
     const routeGroup = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
     const routeMember = routeGroup && !isForwardChainGroup(routeGroup) ? forwardGroupRouteMembers(routeGroup)[0] : null;
     const tunnelId = Number(rule.tunnelId || routeMember?.tunnelId || 0);
     const tunnel = tunnelId ? tunnelById.get(tunnelId) : null;
-    const tunnelHostById = new Map<number, any>();
-    if (tunnel) {
-      [
-        ...(Array.isArray((tunnel as any).hopHosts) ? (tunnel as any).hopHosts : []),
-        (tunnel as any).entryHost,
-        (tunnel as any).exitHost,
-        ...(Array.isArray((tunnel as any).loadBalanceExits) ? (tunnel as any).loadBalanceExits.map((exit: any) => exit?.host) : []),
-      ].forEach((host: any) => {
-        const id = Number(host?.id || 0);
-        if (id > 0) tunnelHostById.set(id, host);
-      });
-    }
-    const hostForRouteId = (hostId: number) => hostById.get(Number(hostId)) || tunnelHostById.get(Number(hostId));
+    const hostById = addTunnelHostNodeMeta(meta, tunnel, hosts);
+    const hostForRouteId = (hostId: number) => hostById.get(Number(hostId));
     const chainGroup = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
     const chainEntryGroup = chainGroup && isForwardChainGroup(chainGroup) && Number(chainGroup.entryGroupId || 0) > 0
       ? forwardGroupById.get(Number(chainGroup.entryGroupId))
@@ -5249,6 +5286,16 @@ function RulesContent() {
       ], targetMeta);
     }
 
+    const portEntries = portEntryProbeHosts(routeGroup, hosts || []);
+    if (portEntries.length) {
+      const plannedSegments: LinkTestPlannedSegment[] = portEntries.map(entry => {
+        addHostNodeMeta(meta, entry.host, [entry.label, `主机 #${entry.hostId}`, `主机${entry.hostId}`]);
+        return {from:entry.label, to:ruleLabel, fromHostId:entry.hostId,
+          toHostId:Number(targetHost?.id || 0) || null, hopIndex:0, hopCount:1,
+          fromMeta:meta[entry.label], toMeta:meta[ruleLabel]};
+      });
+      return {nodeMeta:meta,sourceLabel:portEntries.map(entry => entry.label).join(" / "),targetLabel:ruleLabel,plannedSegments};
+    }
     const routeHosts = routeHostIds
       .map((hostId: number) => hostForRouteId(Number(hostId)))
       .filter(Boolean);
@@ -6096,9 +6143,9 @@ function RulesContent() {
     return getRuleEntries(rule)[0]?.value || getHostEntryAddress(getRuleEntryHost(rule));
   };
 
-  const getRuleEntries = (rule: any): EntryAddress[] => {
+  const getRuleEntries = (rule: any, includeIpv6 = false): EntryAddress[] => {
     const tunnel = rule.tunnelId ? tunnelById.get(Number(rule.tunnelId)) : null;
-    const tunnelEntries = getTunnelEntryAddresses(tunnel);
+    const tunnelEntries = getTunnelEntryAddresses(tunnel, includeIpv6);
     if (tunnelEntries.length > 0) return tunnelEntries;
     return getHostEntryAddresses(getRuleEntryHost(rule));
   };
@@ -6114,20 +6161,26 @@ function RulesContent() {
         : null);
   };
 
-  const getTunnelEntryAddresses = (tunnel: any | null | undefined): EntryAddress[] => {
+  const getTunnelEntryAddresses = (tunnel: any | null | undefined, includeIpv6 = false): EntryAddress[] => {
     if (!tunnel) return [];
     const rows: EntryAddress[] = [];
     const entryGroup = Number(tunnel?.entryGroupId || 0) > 0
       ? forwardGroupById.get(Number(tunnel.entryGroupId)) || tunnel.entryGroup
       : null;
     const entryGroupDomain = String(entryGroup?.domain || "").trim();
-    if (entryGroupDomain) {
-      pushUniqueEntryAddress(rows, translateText("入口组"), entryGroupDomain);
-      return rows;
-    }
     const entryMembers = entryGroup && normalizeForwardGroupModeForRule(entryGroup) === "entry"
       ? enabledHostMembers(entryGroup)
       : [];
+    const entryHostId = Number(tunnel?.entryHostId || getTunnelHopIds(tunnel)[0] || 0);
+    const ipv6Alternatives = () => (entryMembers.length > 0
+      ? entryMembers.flatMap((member: any) => getHostEntryAddresses(
+        getTunnelEntryHostForDisplay(tunnel, Number(member.hostId || 0)) || member.host,
+      ))
+      : getHostEntryAddresses(getTunnelEntryHostForDisplay(tunnel, entryHostId)));
+    if (entryGroupDomain) {
+      pushUniqueEntryAddress(rows, translateText("入口组"), entryGroupDomain);
+      return includeIpv6 ? appendRuleEntryIpv6Addresses(rows, ipv6Alternatives()) : rows;
+    }
     if (entryMembers.length > 0) {
       const memberEntries = entryMembers.flatMap((member: any) => {
         const host = getTunnelEntryHostForDisplay(tunnel, Number(member.hostId || 0));
@@ -6137,15 +6190,14 @@ function RulesContent() {
         || memberEntries.find((entry) => addressFamily(entry.value) === "hostname");
       if (memberDomain) {
         pushUniqueEntryAddress(rows, memberDomain.label, memberDomain.value);
-        return rows;
+        return includeIpv6 ? appendRuleEntryIpv6Addresses(rows, ipv6Alternatives()) : rows;
       }
       const firstEntryHost = getTunnelEntryHostForDisplay(tunnel, Number(entryMembers[0]?.hostId || 0));
       for (const entry of getHostEntryAddresses(firstEntryHost)) {
         pushUniqueEntryAddress(rows, entry.label, entry.value);
       }
-      return rows;
+      return includeIpv6 ? appendRuleEntryIpv6Addresses(rows, ipv6Alternatives()) : rows;
     }
-    const entryHostId = Number(tunnel?.entryHostId || getTunnelHopIds(tunnel)[0] || 0);
     for (const entry of getHostEntryAddresses(getTunnelEntryHostForDisplay(tunnel, entryHostId))) {
       pushUniqueEntryAddress(rows, entry.label, entry.value);
     }
@@ -6170,10 +6222,10 @@ function RulesContent() {
     return member?.host || null;
   };
 
-  const pushMemberEntryAddresses = (rows: EntryAddress[], member: any | null | undefined) => {
+  const pushMemberEntryAddresses = (rows: EntryAddress[], member: any | null | undefined, includeIpv6 = false) => {
     const tunnelId = Number(member?.tunnelId || 0);
     if (tunnelId > 0) {
-      const tunnelRows = getTunnelEntryAddresses(tunnelById.get(tunnelId));
+      const tunnelRows = getTunnelEntryAddresses(tunnelById.get(tunnelId), includeIpv6);
       for (const entry of tunnelRows) {
         pushUniqueEntryAddress(rows, entry.label, entry.value);
       }
@@ -6186,14 +6238,14 @@ function RulesContent() {
     pushUniqueEntryAddress(rows, translateText("入口"), member?.entryAddress);
   };
 
-  const getForwardGroupEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
+  const getForwardGroupEntryAddresses = (group: any | null | undefined, includeIpv6 = false): EntryAddress[] => {
     if (!group) return [];
     const rows: EntryAddress[] = [];
     const parallel = normalizeForwardGroupModeForRule(group) === "port" && Number(group.entryGroupId || 0) > 0;
     const domain = String(group?.domain || (parallel ? entryDomainForForwardGroup(group) : "")).trim();
     if (domain) {
       pushUniqueEntryAddress(rows, getForwardGroupRouteLabel(group), domain);
-      if (!parallel) return rows;
+      if (!parallel && !includeIpv6) return rows;
     }
     const activeMemberId = Number(group?.activeMemberId || 0);
     const members = [...(group?.members || [])]
@@ -6206,40 +6258,53 @@ function RulesContent() {
         return Number(a.priority || 0) - Number(b.priority || 0);
       });
     for (const member of members) {
-      pushMemberEntryAddresses(rows, member);
-      if (rows.length > 0 && !parallel) return rows;
+      const memberRows: EntryAddress[] = [];
+      pushMemberEntryAddresses(memberRows, member, includeIpv6);
+      if (domain && !parallel) {
+        if (memberRows.length > 0) return appendRuleEntryIpv6Addresses(rows, memberRows);
+      } else {
+        for (const entry of memberRows) pushUniqueEntryAddress(rows, entry.label, entry.value);
+        if (rows.length > 0 && !parallel) return rows;
+      }
     }
     return rows;
   };
 
-  const getForwardChainEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
+  const getForwardChainEntryAddresses = (group: any | null | undefined, includeIpv6 = false): EntryAddress[] => {
     if (!group) return [];
     const rows: EntryAddress[] = [];
     const entryGroup = isForwardChainGroup(group) && group.entryGroupId
       ? forwardGroupById.get(Number(group.entryGroupId)) || group.entryGroup
       : null;
     const domain = entryDomainForForwardGroup(group);
-    if (domain) {
-      pushUniqueEntryAddress(rows, translateText("入口组"), domain);
-      return rows;
-    }
     const entryMembers = entryGroup && normalizeForwardGroupModeForRule(entryGroup) === "entry"
       ? enabledHostMembers(entryGroup)
       : [];
+    const ipv6Alternatives = () => {
+      const candidates: EntryAddress[] = [];
+      for (const member of entryMembers.length > 0 ? entryMembers : (group.members || []).slice(0, 1)) {
+        pushMemberEntryAddresses(candidates, member, true);
+      }
+      return candidates;
+    };
+    if (domain) {
+      pushUniqueEntryAddress(rows, translateText("入口组"), domain);
+      return includeIpv6 ? appendRuleEntryIpv6Addresses(rows, ipv6Alternatives()) : rows;
+    }
     if (entryMembers.length > 0) {
       const memberDomain = entryMembers
         .map((member: any) => getHostEntryAddresses(getMemberEntryHost(member)).find((entry) => addressFamily(entry.value) === "hostname"))
         .find(Boolean);
       if (memberDomain) {
         pushUniqueEntryAddress(rows, memberDomain.label, memberDomain.value);
-        return rows;
+        return includeIpv6 ? appendRuleEntryIpv6Addresses(rows, ipv6Alternatives()) : rows;
       }
       const firstEntryMember = entryMembers[0];
-      pushMemberEntryAddresses(rows, firstEntryMember);
-      return rows;
+      pushMemberEntryAddresses(rows, firstEntryMember, includeIpv6);
+      return includeIpv6 ? appendRuleEntryIpv6Addresses(rows, ipv6Alternatives()) : rows;
     }
     const entryMember = (group.members || [])[0];
-    pushMemberEntryAddresses(rows, entryMember);
+    pushMemberEntryAddresses(rows, entryMember, includeIpv6);
     return rows;
   };
 
@@ -6348,20 +6413,20 @@ function RulesContent() {
     );
   };
 
-  const getRuleTransferDisplay = (rule: any) => {
+  const getRuleTransferDisplay = (rule: any, includeIpv6 = false) => {
     const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
     const groupRouteLabel = getForwardGroupRouteLabel(group);
     const groupEntry = isForwardChainGroup(group)
       ? (entryDomainForForwardGroup(group) || group?.members?.[0]?.entryAddress || "")
       : (group?.domain || group?.members?.[0]?.entryAddress || "");
-    const chainEntryItems = isForwardChainGroup(group) ? getForwardChainEntryAddresses(group) : [];
-    const groupEntryItems = rule.forwardGroupId && !isForwardChainGroup(group) ? getForwardGroupEntryAddresses(group) : [];
+    const chainEntryItems = isForwardChainGroup(group) ? getForwardChainEntryAddresses(group, includeIpv6) : [];
+    const groupEntryItems = rule.forwardGroupId && !isForwardChainGroup(group) ? getForwardGroupEntryAddresses(group, includeIpv6) : [];
     const entryItems = rule.forwardGroupId
       ? (isForwardChainGroup(group) ? (chainEntryItems.length > 0 ? chainEntryItems : [{ label: translateText("转发链"), value: groupEntry }]) : (groupEntryItems.length > 0 ? groupEntryItems : [{ label: groupRouteLabel, value: groupEntry }]))
-      : (getRuleEntries(rule).length > 0
-        ? getRuleEntries(rule)
+      : (getRuleEntries(rule, includeIpv6).length > 0
+        ? getRuleEntries(rule, includeIpv6)
         : [{ label: translateText("入口"), value: "" }]);
-    const resolvedEntryAddresses = filterRuleEntryAddressesForDisplay(entryItems)
+    const resolvedEntryAddresses = filterRuleEntryAddressesForDisplay(entryItems, includeIpv6)
       .filter((entry) => String(entry.value || "").trim())
       .map((entry) => ({
         ...entry,
@@ -6392,40 +6457,54 @@ function RulesContent() {
     const {
       entryAddresses,
       targetAddress,
-      entryTitle,
       failoverCount,
       failoverEnabled,
       failoverStrategy,
-    } = getRuleTransferDisplay(rule);
+    } = getRuleTransferDisplay(rule, effectiveRuleCardSize === "standard");
     const failoverBadge = failoverEnabled ? (
-      <Badge variant="outline" className="h-5 shrink-0 border-amber-500/30 px-1.5 text-[10px] text-amber-600">
+      <Badge variant="outline" className="h-5 shrink-0 border-amber-500/30 px-1.5 text-[11px] text-amber-600">
         {failoverStrategyLabels[failoverStrategy]} {failoverCount}
       </Badge>
     ) : null;
 
-    const panelClass = compact
+    const inlineEndpoints = effectiveRuleCardSize === "compact";
+    const panelClass = inlineEndpoints
+      ? "pearl-readout flex min-w-0 items-start gap-1.5 rounded-xl border border-border/50 px-2 py-1"
+      : compact
       ? "pearl-readout rounded-xl border border-border/50 px-2 py-1.5"
       : "pearl-readout rounded-xl border border-border/50 px-2.5 py-2";
-    const labelClass = "mb-1 flex items-center gap-1 text-[10px] font-medium text-muted-foreground";
-    const valueClass = compact
-      ? "min-w-0 break-all text-[11px] leading-4"
-      : "min-w-0 break-all text-xs leading-5";
+    const labelClass = cn(
+      "text-xs font-medium leading-4 text-muted-foreground",
+      inlineEndpoints
+        ? "shrink-0 whitespace-nowrap py-0.5"
+        : "mb-1 flex items-center gap-1",
+    );
+    const valueClass = cn(
+      "min-w-0 font-mono font-normal",
+      compact ? "text-[11px] leading-4" : "text-xs leading-5",
+      inlineEndpoints ? "flex-1 truncate" : "break-all",
+    );
 
     return (
-      <div className="pearl-transfer min-w-0 space-y-1.5 font-mono text-xs">
+      <div className={cn("pearl-transfer min-w-0 font-mono text-xs", inlineEndpoints ? "space-y-1.5" : "rule-standard-transfer-sections")}>
         <div className={panelClass}>
           <div className={labelClass}>{translateText("入口")}</div>
-          <div className="flex min-w-0 flex-col gap-1">
+          <div className={cn("flex min-w-0 flex-col gap-1", inlineEndpoints && "flex-1")}>
             {entryAddresses.map((entry) => (
               <button
                 key={`${entry.label}:${entry.value}`}
                 type="button"
                 onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
                 disabled={!entry.copyable}
-                className="group flex max-w-full min-w-0 items-start justify-between gap-1.5 rounded bg-muted/35 px-1.5 py-1 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground"
-                title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
+                className={cn("group flex max-w-full min-w-0 items-start gap-1.5 rounded px-1.5 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground", inlineEndpoints ? "py-0.5" : "bg-muted/35 py-1")}
+                title={entry.copyable ? translateText("复制入口地址: {0}", [entry.text]) : entry.text}
               >
-                <code className={valueClass}>{entry.text}</code>
+                {!inlineEndpoints && entry.copyable && (
+                  <span className="w-[4ch] shrink-0 text-[11px] leading-4 text-muted-foreground">
+                    {addressFamily(entry.value) === "ipv6" ? "IPv6" : "IPv4"}
+                  </span>
+                )}
+                <code className={cn(valueClass, "flex-1 text-left")} title={inlineEndpoints ? entry.text : undefined}>{entry.text}</code>
                 {entry.copyable && <Copy className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
               </button>
             ))}
@@ -6438,8 +6517,8 @@ function RulesContent() {
         </div>
         <div className={panelClass}>
           <div className={labelClass}>{translateText("出口")}</div>
-          <div className="flex min-w-0 items-start gap-1.5">
-            <code className={`${valueClass} flex-1 rounded bg-muted/35 px-1.5 py-1`} title={targetAddress}>
+          <div className={cn("flex min-w-0 items-start gap-1.5", inlineEndpoints && "flex-1")}>
+            <code className={cn(valueClass, "flex-1 rounded px-1.5", inlineEndpoints ? "py-0.5" : "bg-muted/35 py-1")} title={targetAddress}>
               {targetAddress}
             </code>
             {failoverBadge}
@@ -6467,7 +6546,7 @@ function RulesContent() {
             className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded border border-border/40 bg-muted/30 px-1.5 py-0.5 text-left transition-colors enabled:hover:bg-muted/70 disabled:cursor-default disabled:text-muted-foreground"
             title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
           >
-            {entryAddresses.length > 1 && <span className="shrink-0 text-[10px] text-muted-foreground">{entry.label}</span>}
+            {entryAddresses.length > 1 && <span className="shrink-0 text-[11px] text-muted-foreground">{entry.label}</span>}
             <code className="min-w-0 truncate">{renderTableAddressText(entry.text)}</code>
             {entry.copyable && <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
           </button>
@@ -6484,7 +6563,7 @@ function RulesContent() {
           {renderTableAddressText(targetAddress)}
         </code>
         {failoverEnabled && (
-          <Badge variant="outline" className="h-5 shrink-0 border-amber-500/30 px-1.5 text-[10px] text-amber-600">
+          <Badge variant="outline" className="h-5 shrink-0 border-amber-500/30 px-1.5 text-[11px] text-amber-600">
             {failoverStrategyLabels[failoverStrategy]} {failoverCount}
           </Badge>
         )}
@@ -6508,7 +6587,7 @@ function RulesContent() {
     return (
       <Badge
         variant="outline"
-        className={`h-5 min-w-0 w-fit whitespace-nowrap px-1.5 text-[10px] [&>svg]:shrink-0 ${forwardToolBadgeClass(forwardType)}`}
+        className={`h-5 min-w-0 w-fit whitespace-nowrap px-1.5 text-[11px] [&>svg]:shrink-0 ${forwardToolBadgeClass(forwardType)}`}
         title={translateText("转发工具：{0}", [label])}
       >
         {forwardType === "iptables" || forwardType === "nftables" ? (
@@ -6539,7 +6618,7 @@ function RulesContent() {
     return (
       <Badge
         variant="outline"
-        className="h-5 w-fit border-amber-500/35 bg-amber-500/10 px-1.5 text-[10px] text-amber-700 dark:text-amber-300"
+        className="h-5 w-fit border-amber-500/35 bg-amber-500/10 px-1.5 text-[11px] text-amber-700 dark:text-amber-300"
         title={warning}
       >
         <AlertCircle className="mr-1 h-3 w-3" />{translateText("跨 IPv4/IPv6 风险")}</Badge>
@@ -6564,7 +6643,7 @@ function RulesContent() {
       <Badge
         variant="outline"
         title={routeLabel}
-        className={`h-5 min-w-0 w-fit whitespace-nowrap px-1.5 text-[10px] ${
+        className={`h-5 min-w-0 w-fit whitespace-nowrap px-1.5 text-[11px] ${
           rule.forwardGroupId
             ? "border-emerald-500/30 text-emerald-600"
             : rule.forwardType === "iptables" || rule.forwardType === "nftables"
@@ -6626,7 +6705,7 @@ function RulesContent() {
       groupIds={rule.personalGroupIds}
       groups={personalGroupsQuery.data?.groups || []}
       path={tunnel ? renderTunnelRoute(tunnel, false) : null}
-      warning={<>{renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule))}{!isRuleSupported(rule) && <Badge variant="outline" className="h-5 border-destructive/30 px-1.5 text-[10px] text-destructive">{protocolUnsupportedLabel(getRuleProtocolKey(rule))}{translateText(" 不支持")}</Badge>}</>}
+      warning={<>{renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule))}{!isRuleSupported(rule) && <Badge variant="outline" className="h-5 border-destructive/30 px-1.5 text-[11px] text-destructive">{protocolUnsupportedLabel(getRuleProtocolKey(rule))}{translateText(" 不支持")}</Badge>}</>}
     />;
   };
 
@@ -6956,7 +7035,7 @@ function RulesContent() {
           <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${collapsed ? "" : "rotate-90"}`} />
           {renderRuleGroupIcon(group.type, compact ? "h-3.5 w-3.5" : "h-4 w-4")}
           <span className="truncate text-sm font-semibold">{group.label}</span>
-          <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">{group.rules.length}</Badge>
+          <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{group.rules.length}</Badge>
           {!compact && <span className="min-w-0 truncate text-xs text-muted-foreground">{ruleTypeDescriptions[group.type]}</span>}
         </button>
       </div>
@@ -7244,8 +7323,8 @@ function RulesContent() {
       case "entry": return renderTableTransferEntry(rule);
       case "exit": return renderTableTransferExit(rule);
       case "route": return renderRouteBadge(rule, true);
-      case "protocol": return <Badge variant="secondary" className="max-w-full truncate whitespace-nowrap text-[10px]" title={formatForwardRuleProtocol(rule.protocol)}>{formatForwardRuleProtocol(rule.protocol)}</Badge>;
-      case "total": return <div className="flex items-center gap-2 whitespace-nowrap text-xs"><span className="tabular-nums">{totalTrafficByRule.has(rule.id) ? formatRuleTraffic(Number(totalTrafficByRule.get(rule.id)?.bytesIn || 0) + Number(totalTrafficByRule.get(rule.id)?.bytesOut || 0)) : "—"}</span><button type="button" className="text-muted-foreground underline underline-offset-4" onClick={() => setCumulativeDetailId(Number(rule.id))}>{translateText("详细")}</button></div>;
+      case "protocol": return <Badge variant="secondary" className="max-w-full truncate whitespace-nowrap text-[11px]" title={formatForwardRuleProtocol(rule.protocol)}>{formatForwardRuleProtocol(rule.protocol)}</Badge>;
+      case "total": return renderTableRuleTotalTraffic(rule);
       case "quota": return isAdminManagedRule(rule) ? <RuleUsageSummary rule={rule} totals={totalTrafficByRule.get(rule.id)} compact formatBytes={formatRuleTraffic} /> : <span className="text-muted-foreground">—</span>;
       case "daily": return renderTableRuleDailyTraffic(rule);
       case "latency": return <RuleLatencyButton ruleId={Number(rule.id)} configurationKey={latencyConfigurations.get(Number(rule.id)) || ""} summary={stableProbeByRule.get(Number(rule.id))} disabled={!supported || user?.role !== "admin" && isAdminManagedRule(rule)} store={latencyStore} />;
@@ -7332,11 +7411,11 @@ function RulesContent() {
 
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 border-t border-border/40 pt-1.5 text-xs">
               <div className="min-w-0">
-                <div className="mb-0.5 flex h-4 items-center gap-1 text-[10px] text-muted-foreground">{translateText("累计流量")}<RuleUsageSummary rule={rule} totals={totalTrafficByRule.get(rule.id)} iconOnly /></div>
+                <div className="mb-0.5 flex h-4 items-center gap-1 text-[11px] text-muted-foreground">{translateText("累计流量")}<RuleUsageSummary rule={rule} totals={totalTrafficByRule.get(rule.id)} iconOnly /></div>
                 {renderMobileRuleTotalTraffic(rule)}
               </div>
               <div className="min-w-0 text-right">
-                <div className="mb-0.5 text-[10px] text-muted-foreground">24H</div>
+                <div className="mb-0.5 text-[11px] text-muted-foreground">24H</div>
                 <div className="flex flex-wrap justify-end gap-x-2 gap-y-0.5">
                   {renderRuleDailyTrafficValue(rule, "in")}
                   {renderRuleDailyTrafficValue(rule, "out")}
@@ -7358,14 +7437,14 @@ function RulesContent() {
         interactive={supported && !sortable?.isDragging}
         {...(sortable?.itemProps || {})}
         className={cn(
-          "group/sortable relative action-card border-border/40 bg-card/60 transition-[box-shadow,opacity]",
+          "group/sortable relative action-card rule-standard-card border-border/40 bg-card/60 transition-[box-shadow,opacity]",
           !supported && "opacity-70",
           sortable?.isDragging && "opacity-55 ring-1 ring-primary/35",
           sortable?.isDropTarget && "ring-1 ring-primary/45",
         )}
         title={!supported ? unsupportedProtocolTitle : undefined}
       >
-        <CardContent className="action-card-content space-y-3 p-4">
+        <CardContent className="action-card-content rule-standard-card-content p-4">
           <div className="flex min-w-0 items-start justify-between gap-3">
             <div className="flex min-w-0 flex-1 items-start gap-2">
               <RuleBulkCheckbox {...bulkSelection.getCheckboxProps([rule])} label={translateText("选择规则 {0}", [rule.name])} className="mt-0.5" />
@@ -7409,7 +7488,7 @@ function RulesContent() {
             </RuleCardControls>
           </div>
 
-          <div className="min-w-0">
+          <div className="rule-standard-card-transfer min-w-0">
             {renderTransfer(rule, true)}
           </div>
           {renderRuleCardMetadata(rule)}
@@ -7489,9 +7568,9 @@ function RulesContent() {
     <div className="space-y-6">
       <div className="pearl-page-header flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight">{translateText("转发规则")}</h1>
+          <h1 className="text-xl font-semibold sm:text-2xl">{translateText("转发规则")}</h1>
         </div>
-        <div className="responsive-actions grid min-w-0 w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
+        <div className="responsive-actions pearl-toolbar grid min-w-0 w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
           <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <Zap className="h-3 w-3 text-chart-2" />
             <AnimatedStatValue
@@ -7557,18 +7636,18 @@ function RulesContent() {
           >
             <ClipboardCopy className="h-4 w-4" />{translateText("批量管理")}</Button>
           {rulePermissionLoading ? (
-            <Button disabled className="col-span-2 gap-2 sm:col-span-1">
+            <Button disabled className="gap-2">
               <Loader2 className="h-4 w-4 animate-spin" />{translateText("权限加载中")}</Button>
           ) : canAdd ? (
             <Button
               onClick={() => openCreate()}
-              className="col-span-2 gap-2 sm:col-span-1"
+              className="gap-2"
               disabled={!canCreateRule}
               title={!canCreateRule ? translateText("暂无可用转发资源") : undefined}
             >
               <Plus className="h-4 w-4" />{translateText("添加规则")}</Button>
           ) : (
-            <Button disabled className="col-span-2 gap-2 sm:col-span-1" title={translateText("需要管理员授权后才能添加规则")}>
+            <Button disabled className="gap-2" title={translateText("需要管理员授权后才能添加规则")}>
               <Plus className="h-4 w-4" />{translateText("添加规则")}</Button>
           )}
         </div>
@@ -7584,11 +7663,12 @@ function RulesContent() {
       {(user?.role === "admin" || ruleScopeTotal > 0 || hasActiveRuleFilter || (rules && rules.length > 0)) && (
         <div className="space-y-3">
           <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
-            <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 sm:flex">
               <Filter className="h-4 w-4 text-muted-foreground" />
               <span className="text-sm text-muted-foreground">{translateText("筛选：")}</span>
             </div>
-            <div className="relative w-full sm:w-[260px] lg:w-[320px]">
+            <div className="flex items-center gap-2 sm:contents">
+            <div className="relative min-w-0 flex-1 sm:w-[260px] sm:flex-none lg:w-[320px]">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={ruleSearchQuery}
@@ -7607,6 +7687,13 @@ function RulesContent() {
                 </button>
               ) : null}
             </div>
+            <MobileFilterToggle
+              open={mobileFiltersOpen}
+              onOpenChange={setMobileFiltersOpen}
+              activeCount={Number(filterResource !== "all") + Number(user?.role === "admin" && filterUser !== "self")}
+            />
+            </div>
+            <div className={mobileFilterPanelClass(mobileFiltersOpen)}>
             {user?.role === "admin" && (
               <UserSelect value={filterUser} onValueChange={handleFilterUserChange} excludeUserId={user?.id}
                 className="h-8 w-full text-xs sm:w-[180px]"
@@ -7689,6 +7776,8 @@ function RulesContent() {
                 </div>
               </DropdownMenuContent>
             </DropdownMenu>
+            <SummaryToggle collapsed={summaryCollapsed} onCollapsedChange={setSummaryCollapsed} className="justify-self-start sm:ml-auto" />
+            </div>
           </div>
 
           {user?.role === "admin" && ruleCategory === "sni" && sniDomainConfiguration.isError && <p role="status" className="text-xs text-destructive">{translateText("域名配置核对加载失败，请稍后刷新。")}</p>}
@@ -7699,15 +7788,14 @@ function RulesContent() {
       )}
 
       {/* 转发流量汇总 */}
-      <div className="grid grid-cols-3 gap-1.5 sm:gap-4">
-        <Card hoverable className="group relative overflow-hidden border-border/40 bg-card/60">
-          <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-[0.035] transition-opacity group-hover:opacity-[0.07]" />
-          <CardContent className="relative flex min-w-0 items-center justify-between p-2 sm:gap-3 sm:p-4">
+      <div className={cn("rule-traffic-summary grid grid-cols-3 gap-2 sm:gap-4", summaryCollapsed && "hidden")}>
+        <Card hoverable disableEnterAnimation className="border-border/60">
+          <CardContent className="relative flex min-w-0 items-center justify-between p-3 sm:gap-3 sm:p-4">
             <div className="w-full min-w-0 sm:flex-1">
-              <p className="whitespace-nowrap text-[10px] text-muted-foreground sm:text-xs">{translateText("入向流量")}</p>
+              <p className="rule-traffic-title text-xs leading-relaxed text-muted-foreground">{translateText("入向流量")}</p>
               <div className="mt-1 grid min-w-0 gap-0.5 sm:mt-0.5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-2 sm:gap-y-1">
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-1 sm:inline-flex">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] font-medium uppercase text-muted-foreground sm:text-[10px]">
+                <div className="rule-traffic-total flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                     <span className="sm:hidden">{translateText("总")}</span>
                     <span className="hidden sm:inline">{translateText("累计")}</span>
                   </span>
@@ -7719,11 +7807,11 @@ function RulesContent() {
                     fallbackCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.total.last.bytesIn`]}
                     mirrorCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.total.last.bytesIn`]}
                     fallbackValue="0 B"
-                    className="min-w-0 whitespace-nowrap text-[10px] font-semibold tabular-nums sm:truncate sm:text-xl"
+                    className="min-w-0 break-words text-base font-semibold tabular-nums [overflow-wrap:anywhere] sm:text-xl"
                   />
                 </div>
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-1 sm:inline-flex">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] font-medium uppercase text-muted-foreground sm:text-[10px]">24H</span>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">24H</span>
                   <AnimatedStatValue
                     as="span"
                     value={formatBytes(dailyTrafficTotals.bytesIn)}
@@ -7732,22 +7820,21 @@ function RulesContent() {
                     fallbackCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.daily.last.bytesIn`]}
                     mirrorCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.daily.last.bytesIn`]}
                     fallbackValue="0 B"
-                    className="min-w-0 whitespace-nowrap text-[9px] font-semibold tabular-nums text-foreground sm:truncate sm:text-xs"
+                    className="min-w-0 break-words text-xs font-medium tabular-nums text-foreground [overflow-wrap:anywhere]"
                   />
                 </div>
               </div>
             </div>
-            <ArrowDownToLine className="hidden h-6 w-6 shrink-0 text-chart-2 sm:block" />
+            <ArrowDownToLine className="hidden h-4 w-4 shrink-0 text-chart-1 sm:block" />
           </CardContent>
         </Card>
-        <Card hoverable className="group relative overflow-hidden border-border/40 bg-card/60">
-          <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-[0.035] transition-opacity group-hover:opacity-[0.07]" />
-          <CardContent className="relative flex min-w-0 items-center justify-between p-2 sm:gap-4 sm:p-4">
+        <Card hoverable disableEnterAnimation className="border-border/60">
+          <CardContent className="relative flex min-w-0 items-center justify-between p-3 sm:gap-3 sm:p-4">
             <div className="w-full min-w-0 sm:flex-1">
-              <p className="whitespace-nowrap text-[10px] text-muted-foreground sm:text-xs">{translateText("出向流量")}</p>
+              <p className="rule-traffic-title text-xs leading-relaxed text-muted-foreground">{translateText("出向流量")}</p>
               <div className="mt-1 grid min-w-0 gap-0.5 sm:mt-0.5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-2 sm:gap-y-1">
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-1 sm:inline-flex">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] font-medium uppercase text-muted-foreground sm:text-[10px]">
+                <div className="rule-traffic-total flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                     <span className="sm:hidden">{translateText("总")}</span>
                     <span className="hidden sm:inline">{translateText("累计")}</span>
                   </span>
@@ -7759,11 +7846,11 @@ function RulesContent() {
                     fallbackCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.total.last.bytesOut`]}
                     mirrorCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.total.last.bytesOut`]}
                     fallbackValue="0 B"
-                    className="min-w-0 whitespace-nowrap text-[10px] font-semibold tabular-nums sm:truncate sm:text-xl"
+                    className="min-w-0 break-words text-base font-semibold tabular-nums [overflow-wrap:anywhere] sm:text-xl"
                   />
                 </div>
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-1 sm:inline-flex">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] font-medium uppercase text-muted-foreground sm:text-[10px]">24H</span>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">24H</span>
                   <AnimatedStatValue
                     as="span"
                     value={formatBytes(dailyTrafficTotals.bytesOut)}
@@ -7772,22 +7859,21 @@ function RulesContent() {
                     fallbackCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.daily.last.bytesOut`]}
                     mirrorCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.daily.last.bytesOut`]}
                     fallbackValue="0 B"
-                    className="min-w-0 whitespace-nowrap text-[9px] font-semibold tabular-nums text-foreground sm:truncate sm:text-xs"
+                    className="min-w-0 break-words text-xs font-medium tabular-nums text-foreground [overflow-wrap:anywhere]"
                   />
                 </div>
               </div>
             </div>
-            <ArrowUpFromLine className="hidden h-6 w-6 shrink-0 text-chart-4 sm:block" />
+            <ArrowUpFromLine className="hidden h-4 w-4 shrink-0 text-chart-2 sm:block" />
           </CardContent>
         </Card>
-        <Card hoverable className="group relative overflow-hidden border-border/40 bg-card/60">
-          <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-[0.035] transition-opacity group-hover:opacity-[0.07]" />
-          <CardContent className="relative flex min-w-0 items-center justify-between p-2 sm:gap-4 sm:p-4">
+        <Card hoverable disableEnterAnimation className="border-border/60">
+          <CardContent className="relative flex min-w-0 items-center justify-between p-3 sm:gap-3 sm:p-4">
             <div className="w-full min-w-0 sm:flex-1">
-              <p className="whitespace-nowrap text-[10px] text-muted-foreground sm:text-xs">{translateText("连接次数")}</p>
+              <p className="rule-traffic-title text-xs leading-relaxed text-muted-foreground">{translateText("连接次数")}</p>
               <div className="mt-1 grid min-w-0 gap-0.5 sm:mt-0.5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-2 sm:gap-y-1">
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-1 sm:inline-flex">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] font-medium uppercase text-muted-foreground sm:text-[10px]">
+                <div className="rule-traffic-total flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                     <span className="sm:hidden">{translateText("总")}</span>
                     <span className="hidden sm:inline">{translateText("累计")}</span>
                   </span>
@@ -7799,11 +7885,11 @@ function RulesContent() {
                     fallbackCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.total.last.connections`]}
                     mirrorCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.total.last.connections`]}
                     fallbackValue="0"
-                    className="min-w-0 whitespace-nowrap text-[10px] font-semibold tabular-nums sm:truncate sm:text-xl"
+                    className="min-w-0 break-words text-base font-semibold tabular-nums [overflow-wrap:anywhere] sm:text-xl"
                   />
                 </div>
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-1 sm:inline-flex">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] font-medium uppercase text-muted-foreground sm:text-[10px]">24H</span>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">24H</span>
                   <AnimatedStatValue
                     as="span"
                     value={dailyTrafficTotals.connections.toLocaleString(getFormatLocale())}
@@ -7812,12 +7898,12 @@ function RulesContent() {
                     fallbackCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.daily.last.connections`]}
                     mirrorCacheKeys={[`rules.traffic.${trafficTotalsLastCacheScope}.daily.last.connections`]}
                     fallbackValue="0"
-                    className="min-w-0 whitespace-nowrap text-[9px] font-semibold tabular-nums text-foreground sm:truncate sm:text-xs"
+                    className="min-w-0 break-words text-xs font-medium tabular-nums text-foreground [overflow-wrap:anywhere]"
                   />
                 </div>
               </div>
             </div>
-            <Activity className="hidden h-6 w-6 shrink-0 text-chart-3 sm:block" />
+            <Activity className="hidden h-4 w-4 shrink-0 text-muted-foreground sm:block" />
           </CardContent>
         </Card>
       </div>
@@ -7931,7 +8017,7 @@ function RulesContent() {
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
                 <Filter className="h-10 w-10 mb-3 opacity-30" />
                 <p className="text-base font-medium">{translateText("没有匹配的规则")}</p>
-                <p className="text-sm mt-1 text-muted-foreground/60">{translateText("尝试调整筛选条件")}</p>
+                <p className="text-sm mt-1 text-muted-foreground/80">{translateText("尝试调整筛选条件")}</p>
                 {hasActiveRuleFilter && (
                   <Button type="button" variant="outline" className="mt-4 gap-2" onClick={clearRuleFilters}>
                     <XCircle className="h-4 w-4" />{translateText("清除筛选")}</Button>
@@ -7943,7 +8029,7 @@ function RulesContent() {
                   <ArrowRightLeft className="h-8 w-8 opacity-40" />
                 </div>
                 <p className="text-lg font-medium">{translateText("暂无转发规则")}</p>
-                <p className="text-sm mt-1 text-muted-foreground/60">
+                <p className="text-sm mt-1 text-muted-foreground/80">
                   {canCreateRule
                     ? translateText("创建第一条转发规则")
                     : translateText("当前账号没有可用的转发资源")}
@@ -7986,6 +8072,7 @@ function RulesContent() {
         <SelfTestDialog
           ruleId={selfTestRule.id}
           ruleName={selfTestRule.name}
+          probeMethod={ruleLatencyProbeMethodForRule(selfTestRuleDetail || selfTestRule)}
           sourceLabel={selfTestLinkTestNodeData.sourceLabel}
           targetLabel={selfTestLinkTestNodeData.targetLabel}
           nodeMeta={selfTestLinkTestNodeData.nodeMeta}
@@ -8237,7 +8324,7 @@ function RulesContent() {
                   ) : (
                     <div className="flex h-10 items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/30 px-3 text-sm">
                       <span className="truncate">{FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType}</span>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
                         {isForwardGroupRouteMode ? translateText("上级决定") : translateText("已锁定")}
                       </Badge>
                     </div>
@@ -8325,6 +8412,11 @@ function RulesContent() {
                   </Button>
                   )}
                 </div>
+                {(portConfigurationError || portRangeError) && (
+                  <p role="status" aria-live="polite" className="text-xs text-destructive" data-testid="rule-port-diagnostic">
+                    {portConfigurationError || portRangeError}
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>{translateText("目标地址")}</Label>
@@ -8899,8 +8991,8 @@ function RulesContent() {
                             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                               <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
                               <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
-                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
-                              {sni && <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">SNI</Badge>}
+                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
+                              {sni && <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px]">SNI</Badge>}
                             </div>
                             <div className="mt-1 truncate text-xs text-muted-foreground">
                               {sni
@@ -9445,6 +9537,7 @@ function RulesContent() {
 function SelfTestDialog({
   ruleId,
   ruleName,
+  probeMethod,
   sourceLabel,
   targetLabel,
   nodeMeta,
@@ -9454,6 +9547,7 @@ function SelfTestDialog({
 }: {
   ruleId: number;
   ruleName: string;
+  probeMethod?: "tcping" | "ping";
   sourceLabel?: string;
   targetLabel?: string;
   nodeMeta?: Record<string, any>;
@@ -9535,7 +9629,7 @@ function SelfTestDialog({
   const displayedMessage = awaitingNewTest ? null : latest?.message;
   const parsedMessage = useMemo(() => parseLinkTestMessage(displayedMessage), [displayedMessage]);
   const testSource = forwardGroupSelfTestSource(latest);
-  const testSegments: LinkTestPlannedSegment[] | undefined = testSource ? [{
+  const testSegments: LinkTestPlannedSegment[] | undefined = parsedMessage.kind === "port-entry-summary" ? undefined : testSource ? [{
     from: testSource.label,
     to: testSource.targetLabel || targetLabel || ruleName,
     fromHostId: testSource.hostId,
@@ -9543,7 +9637,7 @@ function SelfTestDialog({
     fromMeta: nodeMeta?.[String(testSource.hostId)],
     toMeta: nodeMeta?.[testSource.targetLabel || targetLabel || ruleName],
   }] : plannedSegments;
-  const plannedSegmentCount = testSegments?.length || 0;
+  const plannedSegmentCount = testSegments?.length || parsedMessage.details.length || 0;
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
   const lastFailureToastKey = useRef("");
   useEffect(() => {
@@ -9569,6 +9663,8 @@ function SelfTestDialog({
             <Activity className="h-5 w-5" />{translateText("延迟探测")}</DialogTitle>
           <DialogDescription>{ruleName}</DialogDescription>
         </DialogHeader>
+
+        {probeMethod === "ping" && <p className="text-xs leading-5 text-muted-foreground">{translateText("UDP 延迟仅供参考，不代表实际延迟。")}</p>}
 
         <LinkTestProbeView
           parsed={parsedMessage}

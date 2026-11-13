@@ -45,10 +45,11 @@ try {
   assert.equal((await db.getHostById(1))!.ddnsRecordSetManaged, false);
   const caller = (id: number, role: string) => hostsRouter.createCaller({ user: { id, role }, req: { headers: {}, socket: {} }, res: {}, authSession: null, authFailureReason: null } as any);
   const admin = caller(1, "admin"), owner = caller(2, "user"), stranger = caller(3, "user");
-  await assert.rejects(stranger.update({ id: 1, preferredIpv4: "8.8.8.8" }), /无权/);
-  await assert.rejects(owner.update({ id: 1, preferredIpv4: "9.9.9.9" }), /主 IP/);
-  await assert.rejects(owner.update({ id: 1, preferredIpv4: "2606:4700:4700::1111" }), /主 IP/);
-  await owner.update({ id: 1, preferredIpv4: "8.8.8.8", preferredIpv6: "2606:4700:4700::1001", ddnsEnabled: true, ddnsAddressMode: "all" });
+  await assert.rejects(stranger.update({ id: 1, preferredIpv4: "8.8.8.8" }), (error: any) => error.code === "FORBIDDEN");
+  await assert.rejects(owner.update({ id: 1, preferredIpv4: "8.8.8.8" }), (error: any) => error.code === "FORBIDDEN");
+  await assert.rejects(admin.update({ id: 1, preferredIpv4: "9.9.9.9" }), /主 IP/);
+  await assert.rejects(admin.update({ id: 1, preferredIpv4: "2606:4700:4700::1111" }), /主 IP/);
+  await admin.update({ id: 1, preferredIpv4: "8.8.8.8", preferredIpv6: "2606:4700:4700::1001" });
   let host = (await db.getHostById(1))!;
   assert.equal(host.ipv4, "8.8.8.8"); assert.equal(host.ip, "8.8.8.8"); assert.equal(host.ipv6, "2606:4700:4700::1001");
   assert.equal(host.ddnsEnabled, false); assert.equal(host.ddnsAddressMode, "primary", "only admins may configure DDNS");
@@ -70,10 +71,10 @@ try {
   await settled(item => item.lastDdnsError === null && item.name === "Ordinary save");
   assert.equal((await db.getHostById(1))!.ddnsRecordSetManaged, false);
   assert.ok(requests.every(item => item.action === undefined));
-  await owner.update({ id: 1, preferredIpv4: "1.1.1.1" });
+  await admin.update({ id: 1, preferredIpv4: "1.1.1.1" });
   await settled(item => item.lastDdnsValue === "1.1.1.1" && !item.lastDdnsError);
   assert.deepEqual(providerRecords.get("dual.example.com:A"), ["1.1.1.1", "9.9.9.9"]);
-  await owner.update({ id: 1, preferredIpv4: "8.8.8.8" });
+  await admin.update({ id: 1, preferredIpv4: "8.8.8.8" });
   await settled(item => item.lastDdnsValue === "8.8.8.8" && !item.lastDdnsError);
   requests.length = 0;
   await admin.update({ id: 1, ddnsEnabled: true, ddnsDomain: "dual.example.com", ddnsIpVersion: "both", ddnsAddressMode: "all" });
@@ -118,7 +119,7 @@ try {
   assert.equal(host.ddnsRecordSetManaged, true, "returning to single-stack primary IPs must still remove managed aliases");
   assert.equal(requests.at(-1)?.action, "replace");
   assert.equal((await db.getHostOptions()).find((item: any) => item.id === 1)!.ddnsIpVersion, "ipv4");
-  await owner.update({ id: 1, preferredIpv4: null, preferredIpv6: null });
+  await admin.update({ id: 1, preferredIpv4: null, preferredIpv6: null });
   await settled(item => !item.lastDdnsError);
   assert.equal((await db.getHostById(1))!.preferredIpv4, null);
   const created = await admin.create({ name: "New legacy mode", ip: "8.8.4.4", ddnsEnabled: true, ddnsDomain: "new.example.com", ddnsIpVersion: "ipv4", ddnsAddressMode: "primary" });

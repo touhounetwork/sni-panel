@@ -16,6 +16,10 @@ import { createTRPCQueryUtils } from "@trpc/react-query";
 import { installDashboardCache } from "./lib/dashboardCache";
 import { readSiteBranding, saveSiteBranding } from "./lib/siteBranding";
 import { shouldRetryQuery } from "./lib/queryPolicy";
+import { userEntry } from "./lib/userImpersonation";
+
+userEntry.initialize();
+globalThis.fetch = userEntry.wrapFetch(globalThis.fetch.bind(globalThis));
 
 
 const queryClient = new QueryClient({
@@ -28,11 +32,19 @@ const queryClient = new QueryClient({
     },
   },
 });
-const dashboardCache = installDashboardCache(queryClient, () => mobileAuth.isNative ? mobileAuth.getPanelUrl() : window.location.origin);
+const dashboardCache = userEntry.isEntry() ? { clear() {} } : installDashboardCache(queryClient, () => mobileAuth.isNative ? mobileAuth.getPanelUrl() : window.location.origin);
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
+  if (userEntry.isEntry()) {
+    if (error.data?.code === "UNAUTHORIZED") {
+      userEntry.finish();
+      void queryClient.cancelQueries();
+      queryClient.clear();
+    }
+    return;
+  }
 
   const isUnauthorized =
     error.message === UNAUTHED_ERR_MSG ||
@@ -95,6 +107,8 @@ const criticalQueryPaths = new Set([
   "billing.me",
   "trafficBilling.status",
   "plans.mySubscriptions",
+  // Isolate the GitHub-backed query: a slow feed must not hold up a UI batch.
+  "announcements.upgradePopup",
 ]);
 
 const trpcFetch = (input: RequestInfo | URL, init?: RequestInit) => {

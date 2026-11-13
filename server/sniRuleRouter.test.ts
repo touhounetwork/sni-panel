@@ -620,7 +620,8 @@ test("forward-chain SNI rules share one entry port and reject duplicate or mixed
       assert.match(String(duplicateEntryDomain.reason || ""), /SNI 域名 api\.example\.com 与规则.*sni-api/);
       assert.deepEqual(
         await caller.checkPort({ forwardGroupId: 12, sourcePort: 18443, protocol: "tcp", forwardType: "nftables", sni: "edge.example.com" }),
-        { used: true },
+        // Upstream 298 reports why a group port is unavailable, not only range errors.
+        { used: true, reason: "Entry agent port 18443 is already used" },
       );
       await db.repairConflictingProtocolPortRules();
       assert.equal((await caller.getById({ id: 901 })).isEnabled, false);

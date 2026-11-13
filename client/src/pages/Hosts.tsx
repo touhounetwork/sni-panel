@@ -1,4 +1,5 @@
 import { getFormatLocale } from "@/i18n";
+import { hostNetworkSpeed, stampHostNetworkMetrics } from "@shared/hostNetworkSpeed";
 import { t as translateText } from "@/i18n";
 import { HintSwitch } from "@/components/ui/hint-switch";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -8,6 +9,8 @@ import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AgentTokenManager, { type AgentTokenViewMode } from "@/components/AgentTokenManager";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
+import { MetricReadout } from "@/components/MetricReadout";
+import HostViewSelect from "@/components/hosts/HostViewSelect";
 import ListSettings from "@/components/ListSettings";
 import ColumnResizeHandle from "@/components/ColumnResizeHandle";
 import { useHostTableLayout } from "@/hooks/useHostTableLayout";
@@ -17,10 +20,17 @@ import DateTimePickerInput, {
   parseDateInputValue as parseDateTimeLocal,
 } from "@/components/DatePickerInput";
 import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
+import ThemeBlocks, { themeColumnStyles } from "@/components/themes/ThemeBlocks";
+import { useThemeDefinition } from "@/lib/themeRuntime";
+import { themeText } from "@shared/themeViews";
+import type { ThemeValues } from "@shared/themeFields";
+import { getLanguage } from "@/i18n";
 import HostLoad from "@/components/hosts/HostLoad";
 import HostConnectionCount from "@/components/hosts/HostConnectionCount";
 import HostDeleteDialog from "@/components/hosts/HostDeleteDialog";
 import HostStatusNotificationSetting from "@/components/hosts/HostStatusNotificationSetting";
+import HostAgentPanelUrlSetting from "@/components/hosts/HostAgentPanelUrlSetting";
+import { normalizeAgentPanelUrl } from "@shared/agentPanelUrl";
 import HostReminderSettings from "@/components/hosts/HostReminderSettings";
 import HostTrafficShutdownSetting from "@/components/hosts/HostTrafficShutdownSetting";
 import HostAddressSelectors from "@/components/hosts/HostAddressSelectors";
@@ -86,6 +96,8 @@ import { queryInChunks } from "@/lib/batchOperations";
 import { useQuery } from "@tanstack/react-query";
 import { getQueryKey } from "@trpc/react-query";
 import { cn } from "@/lib/utils";
+import { MobileFilterToggle, mobileFilterPanelClass } from "@/components/MobileFilterToggle";
+import { SummaryToggle, useSummaryCollapsed } from "@/components/SummaryToggle";
 import {
   Activity,
   ArrowDown,
@@ -94,7 +106,6 @@ import {
   ArrowUpFromLine,
   ArrowRightLeft,
   CalendarDays,
-  CircleCheck,
   Clock,
   Cpu,
   Plus,
@@ -104,7 +115,6 @@ import {
   List,
   Globe,
   RadioTower,
-  MapPinned,
   Download,
   Gauge,
   AlertTriangle,
@@ -453,7 +463,7 @@ function HostWorldMap({
         {selectedPoint && <div className="m-3 rounded-xl border border-primary/20 bg-primary/5 p-3"><div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words text-xs font-semibold">{selectedPoint.host.name}</span><button type="button" aria-label={translateText("取消选择")} className="text-muted-foreground hover:text-foreground" onClick={() => setSelectedHostId(null)}>×</button></div><p className="mt-2 text-[11px] text-muted-foreground">{selectedPoint.regionText || translateText("未定位")}</p><p className="mt-1 break-all font-mono text-[11px]">{selectedPoint.addressText}</p><Button variant="outline" size="sm" className="mt-3 h-7 w-full text-xs" onClick={() => onEdit(selectedPoint.host)}>{translateText("编辑主机")}</Button></div>}
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
           {visiblePoints.slice(0, 60).map((point) => <button type="button" key={point.host.id} className="globe-list-row" data-active={selectedPoint?.host.id === point.host.id} aria-pressed={selectedPoint?.host.id === point.host.id} onClick={() => { setSelectedHostId(Number(point.host.id)); scene.focus(point); }}>
-            <div className="flex min-w-0 items-center gap-2"><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: point.color }} /><span className="min-w-0 flex-1 truncate text-xs font-medium">{point.host.name}</span><span className="shrink-0 text-[10px] text-muted-foreground">{point.statusText}</span></div><div className="ml-4 mt-1 truncate text-[10px] text-muted-foreground">{point.regionText || point.addressText}</div>
+            <div className="flex min-w-0 items-center gap-2"><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: point.color }} /><span className="min-w-0 flex-1 truncate text-xs font-medium">{point.host.name}</span><span className="shrink-0 text-[11px] text-muted-foreground">{point.statusText}</span></div><div className="ml-4 mt-1 truncate text-[11px] text-muted-foreground">{point.regionText || point.addressText}</div>
           </button>)}
           {visiblePoints.length === 0 && <p className="py-8 text-center text-xs text-muted-foreground">{translateText("暂无匹配节点")}</p>}
         </div>
@@ -536,6 +546,8 @@ type HostExpiryAction = "none" | "extend_cycle";
 const HOST_TRAFFIC_GB_BYTES = 1024 ** 3;
 
 type HostFormData = {
+  agentPanelUrlEnabled: boolean;
+  agentPanelUrl: string;
   name: string;
   ip: string;
   hostType: "master" | "slave";
@@ -576,6 +588,8 @@ type HostFormData = {
 };
 
 const defaultFormData: HostFormData = {
+  agentPanelUrlEnabled: false,
+  agentPanelUrl: "",
   name: "",
   ip: "",
   hostType: "slave",
@@ -712,8 +726,8 @@ function systemNetworkTotalTitle(metric: any) {
   const total = bytesIn === null && bytesOut === null ? null : (bytesIn ?? 0) + (bytesOut ?? 0);
   return [
     translateText("\u7cfb\u7edf\u7d2f\u8ba1\u6d41\u91cf\uff08\u7cfb\u7edf\u91cd\u542f\u540e\u91cd\u7f6e\uff09"),
-    translateText("入站 {0}", [formatOptionalBytes(bytesIn)]),
-    translateText("出站 {0}", [formatOptionalBytes(bytesOut)]),
+    translateText("入向 {0}", [formatOptionalBytes(bytesIn)]),
+    translateText("出向 {0}", [formatOptionalBytes(bytesOut)]),
     translateText("合计 {0}", [formatOptionalBytes(total)]),
   ].join("\n");
 }
@@ -869,10 +883,6 @@ function HostSummaryCard({
   value,
   subtitle,
   icon: Icon,
-  leadingIcon: LeadingIcon,
-  leadingTone = "bg-emerald-500",
-  iconTone = "bg-chart-2/10 text-chart-2",
-  tone,
   loading,
   cacheKey,
   className,
@@ -881,45 +891,24 @@ function HostSummaryCard({
   value: string;
   subtitle?: string;
   icon: typeof ActivitySquare;
-  leadingIcon?: typeof ActivitySquare;
-  leadingTone?: string;
-  iconTone?: string;
-  tone: string;
   loading?: boolean;
   cacheKey: string;
   className?: string;
 }) {
   return (
-    <Card hoverable className={`group relative h-full overflow-hidden border-border/40 bg-card/60 ${className || ""}`.trim()}>
-      <div className={`absolute inset-0 opacity-[0.035] transition-opacity group-hover:opacity-[0.07] ${tone}`} />
-      <CardContent className="relative flex h-full min-h-[112px] flex-col justify-center p-3.5 sm:min-h-[112px] sm:p-4">
-        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
-        <div className={`absolute right-4 top-3.5 hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm sm:flex ${iconTone}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mt-1 flex min-w-0 items-center gap-2.5 pr-12">
-          {LeadingIcon && (
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${leadingTone}`}>
-              <LeadingIcon className="h-4 w-4 text-white" />
-            </div>
-          )}
-          <div className="min-w-0">
+    <Card hoverable disableEnterAnimation className={`h-full border-border/60 ${className || ""}`.trim()}>
+      <CardContent className="h-full p-4">
+        <MetricReadout title={title} icon={Icon} value={
             <AnimatedStatValue
               as="span"
               value={value}
               loading={loading}
               cacheKey={cacheKey}
               fallbackValue="0"
-              className="block truncate text-2xl font-bold leading-none tracking-tight tabular-nums"
+              className="block truncate"
               title={value}
             />
-            {subtitle && (
-              <p className="mt-2 truncate text-xs text-muted-foreground" title={subtitle}>
-                {subtitle}
-              </p>
-            )}
-          </div>
-        </div>
+        } hint={subtitle} />
       </CardContent>
     </Card>
   );
@@ -929,7 +918,7 @@ function HostTrafficDirectionStat({
   label,
   value,
   icon: Icon,
-  tone,
+  direction,
   loading,
   cacheKey,
   animated = true,
@@ -938,7 +927,7 @@ function HostTrafficDirectionStat({
   label: string;
   value: string;
   icon: typeof ActivitySquare;
-  tone: string;
+  direction: "inbound" | "outbound";
   loading?: boolean;
   cacheKey: string;
   animated?: boolean;
@@ -946,12 +935,10 @@ function HostTrafficDirectionStat({
 }) {
   return (
     <div className={`min-w-0 ${className || ""}`.trim()}>
-      <div className="flex items-center gap-2.5">
-        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${tone}`}>
-          <Icon className="h-4 w-4 text-white" />
-        </div>
+      <div className="flex items-center gap-2">
+        <Icon aria-hidden="true" strokeWidth={1.5} className={cn("h-4 w-4 shrink-0", direction === "inbound" ? "text-chart-1" : "text-chart-2")} />
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
           {animated ? (
             <AnimatedStatValue
               as="p"
@@ -959,12 +946,12 @@ function HostTrafficDirectionStat({
               loading={loading}
               cacheKey={cacheKey}
               fallbackValue="0 B/s"
-              className="mt-0.5 whitespace-nowrap text-base font-semibold leading-tight tabular-nums sm:text-lg"
+              className="mt-1 block truncate text-base font-semibold leading-tight tabular-nums sm:text-lg"
               title={value}
             />
           ) : (
             <p
-              className="mt-0.5 whitespace-nowrap text-base font-semibold leading-tight tabular-nums sm:text-lg"
+              className="mt-1 truncate text-base font-semibold leading-tight tabular-nums sm:text-lg"
               title={value}
             >
               {value}
@@ -981,8 +968,6 @@ function HostTrafficSummaryCard({
   inValue,
   outValue,
   icon: Icon,
-  tone = "bg-gradient-to-br from-chart-1/10 to-transparent",
-  iconTone = "bg-chart-1/10 text-chart-1",
   loading,
   cacheKey,
   animated = true,
@@ -992,26 +977,19 @@ function HostTrafficSummaryCard({
   inValue: string;
   outValue: string;
   icon: typeof ActivitySquare;
-  tone?: string;
-  iconTone?: string;
   loading?: boolean;
   cacheKey: string;
   animated?: boolean;
   className?: string;
 }) {
   return (
-    <Card hoverable className={`group relative h-full overflow-hidden border-border/40 bg-card/60 ${className || ""}`.trim()}>
-      <div className={`absolute inset-0 opacity-[0.04] transition-opacity group-hover:opacity-[0.08] ${tone}`} />
-      <CardContent className="relative flex h-full flex-col justify-start p-3.5 sm:p-4">
-        <div className="flex min-h-0 items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1 pr-12">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
-          </div>
-          <div className={`pointer-events-none absolute right-4 top-3.5 hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm sm:flex ${iconTone}`}>
-            <Icon className="h-5 w-5" />
-          </div>
+    <Card hoverable disableEnterAnimation className={`h-full border-border/60 ${className || ""}`.trim()}>
+      <CardContent className="h-full p-3 sm:p-4">
+        <div className="pearl-metric-heading">
+          <p className="pearl-metric-label">{title}</p>
+          <span aria-hidden="true" className="pearl-metric-icon"><Icon className="h-4 w-4" strokeWidth={1.5} /></span>
         </div>
-        <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(145px,1fr))] gap-2.5">
+        <div className="mt-2 grid gap-2 sm:grid-cols-2 sm:gap-3">
           <HostTrafficDirectionStat
             label={translateText("入向")}
             value={inValue}
@@ -1019,7 +997,7 @@ function HostTrafficSummaryCard({
             cacheKey={`${cacheKey}.in`}
             animated={animated}
             icon={ArrowDownToLine}
-            tone="bg-emerald-500"
+            direction="inbound"
           />
           <HostTrafficDirectionStat
             label={translateText("出向")}
@@ -1028,7 +1006,7 @@ function HostTrafficSummaryCard({
             cacheKey={`${cacheKey}.out`}
             animated={animated}
             icon={ArrowUpFromLine}
-            tone="bg-amber-500"
+            direction="outbound"
           />
         </div>
       </CardContent>
@@ -1236,10 +1214,15 @@ function HostGroupFilterBar({
 
 function HostsContent() {
   const { user } = useAuth();
+  const managedTheme = useThemeDefinition();
+  const themeHosts = managedTheme?.manifest.views?.hosts;
   const tableLayout = useHostTableLayout(user);
   const utils = trpc.useUtils();
   const pageVisible = usePageVisible();
   const [viewMode, setViewMode] = useState<HostViewMode>(() => getStoredHostViewMode());
+  useEffect(() => {
+    setViewMode(themeHosts?.defaultView || getStoredHostViewMode());
+  }, [managedTheme?.revision]);
   const [activeManageTab, setActiveManageTab] = useUrlTab<HostManageTab>({
     values: user?.role === "admin" ? HOST_MANAGE_TABS_ADMIN : HOST_MANAGE_TABS_USER,
     defaultValue: "hosts",
@@ -1247,6 +1230,8 @@ function HostsContent() {
   });
   const [selectedHostGroupId, setSelectedHostGroupId] = useState<number | "all">("all");
   const [hostGroupCreateSignal, setHostGroupCreateSignal] = useState(0);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [summaryCollapsed, setSummaryCollapsed] = useSummaryCollapsed("hosts");
   const [manageSearchQueries, setManageSearchQueries] = useState<Record<HostManageTab, string>>({
     hosts: "",
     groups: "",
@@ -1726,6 +1711,8 @@ function HostsContent() {
 
   const openEdit = (host: any) => {
     setForm({
+      agentPanelUrlEnabled: !!host.agentPanelUrlEnabled,
+      agentPanelUrl: host.agentPanelUrl || "",
       name: host.name,
       ip: host.ip,
       hostType: host.hostType,
@@ -1789,6 +1776,12 @@ function HostsContent() {
   };
 
   const handleSubmit = () => {
+    if (form.agentPanelUrlEnabled && !form.agentPanelUrl.trim()) {
+      toast.error(translateText("请填写 Agent 面板连接地址")); return;
+    }
+    if (form.agentPanelUrl.trim() && !normalizeAgentPanelUrl(form.agentPanelUrl)) {
+      toast.error(translateText("Agent 面板连接地址须为有效 HTTP/HTTPS 地址，不含账号、查询参数或片段")); return;
+    }
     const name = (form.name || "").trim();
     const entry = (form.entryIp || "").trim();
     const tunnelEntry = (form.tunnelEntryIp || "").trim();
@@ -1850,6 +1843,8 @@ function HostsContent() {
     const canSaveTelegramReminder = telegramBotSettingsLoaded ? telegramBotReady : true;
     const trafficConfigPayload = user?.role === "admin"
       ? {
+          agentPanelUrlEnabled: form.agentPanelUrlEnabled,
+          agentPanelUrl: normalizeAgentPanelUrl(form.agentPanelUrl) || null,
           purchasedAt: purchasedAt ? purchasedAt.toISOString() : null,
           stoppedAt: stoppedAt ? stoppedAt.toISOString() : null,
           trafficLimit: trafficLimitBytes,
@@ -2024,8 +2019,9 @@ function HostsContent() {
       normalizedHostSearchQuery || "search-all",
       selectedHostGroupId === "all" ? "all" : `group-${selectedHostGroupId}`,
       hostPagination.currentPage,
+      hostPageRequest.pageSize,
     ].join(":"),
-    [hostCardModeTransitionKey, hostPagination.currentPage, normalizedHostSearchQuery, selectedHostGroupId, viewMode],
+    [hostCardModeTransitionKey, hostPagination.currentPage, hostPageRequest.pageSize, normalizedHostSearchQuery, selectedHostGroupId, viewMode],
   );
   useEffect(() => {
     if (!hostLiveRefreshInterval || !pagedMetricHostIds.length) return;
@@ -2055,12 +2051,16 @@ function HostsContent() {
     for (const row of hostTrafficRows as any[]) map.set(Number(row.hostId), row);
     return map;
   }, [hostTrafficRows]);
-  const { data: hostLatestMetricRows = [] } = useQuery({
+  const { data: hostLatestMetricResponse = [], dataUpdatedAt: hostMetricReceivedAt } = useQuery({
     queryKey: getQueryKey(trpc.hosts.latestMetricsSummary, { hostIds: pagedMetricHostIds }, "query"),
     queryFn: () => queryInChunks(pagedMetricHostIds, 500, (hostIds) => utils.client.hosts.latestMetricsSummary.query({ hostIds })),
     enabled: !!hostLiveRefreshInterval && pagedMetricHostIds.length > 0,
     refetchInterval: adaptivePollingInterval(hostLiveRefreshInterval),
   });
+  const hostLatestMetricRows = useMemo(
+    () => stampHostNetworkMetrics(hostLatestMetricResponse as any[], hostMetricReceivedAt),
+    [hostLatestMetricResponse, hostMetricReceivedAt],
+  );
   const hostLatestMetricById = useMemo(() => {
     const map = new Map<number, any>();
     for (const row of hostLatestMetricRows as any[]) map.set(Number(row.hostId), row);
@@ -2090,6 +2090,8 @@ function HostsContent() {
       compact={options.compact ?? viewMode === "compact-card"}
       dragHandle={options.dragHandle}
       sortableClassName={options.sortableClassName}
+      theme={themeHosts}
+      themeValues={themePageValues}
     />
   );
   const requestResetHostTraffic = (host: any) => {
@@ -2219,8 +2221,8 @@ function HostsContent() {
         const timedOut = isAgentUpgradeTimedOut(host);
         return <div className="flex min-w-0 flex-wrap items-center gap-1">
           <span className="font-mono text-xs text-muted-foreground">{host.agentVersion ? `v${host.agentVersion}` : "—"}</span>
-          {host.agentUpgradeRequested ? <Badge variant="outline" className={cn("shrink-0 whitespace-nowrap px-1 py-0 text-[10px]", timedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary")}>{timedOut ? translateText("升级失败") : translateText("升级中")}</Badge>
-            : isAgentVersionBehind(host.agentVersion, latestAgentVersion) && <Badge variant="outline" className="shrink-0 whitespace-nowrap border-amber-500/30 px-1 py-0 text-[10px] text-amber-500">{translateText("新版本")}</Badge>}
+          {host.agentUpgradeRequested ? <Badge variant="outline" className={cn("shrink-0 whitespace-nowrap px-1 py-0 text-[11px]", timedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary")}>{timedOut ? translateText("升级失败") : translateText("升级中")}</Badge>
+            : isAgentVersionBehind(host.agentVersion, latestAgentVersion) && <Badge variant="outline" className="shrink-0 whitespace-nowrap border-amber-500/30 px-1 py-0 text-[11px] text-amber-500">{translateText("新版本")}</Badge>}
         </div>;
       }
       case "load": return <HostLoad metric={metric} showLabel={false} className="overflow-hidden" />;
@@ -2242,7 +2244,10 @@ function HostsContent() {
         const inText = formatBytes(Number(traffic?.bytesIn || 0)), outText = formatBytes(Number(traffic?.bytesOut || 0));
         return <HostListFlowPair inValue={inText} outValue={outText} inTitle={translateText("累计入向：{0}", [inText])} outTitle={translateText("累计出向：{0}", [outText])} />;
       }
-      case "network": return <HostListFlowPair inValue={formatOptionalBytesPerSecond(metric?.networkSpeedIn)} outValue={formatOptionalBytesPerSecond(metric?.networkSpeedOut)} inTitle={translateText("实时入向")} outTitle={translateText("实时出向")} />;
+      case "network": {
+        const speed = hostNetworkSpeed(metric, undefined, { isOnline: !!host.isOnline });
+        return <HostListFlowPair inValue={formatOptionalBytesPerSecond(speed.in)} outValue={formatOptionalBytesPerSecond(speed.out)} inTitle={translateText("实时入向")} outTitle={translateText("实时出向")} />;
+      }
       case "system": return <HostListFlowPair inValue={formatOptionalBytes(metric?.networkIn)} outValue={formatOptionalBytes(metric?.networkOut)} inTitle={systemNetworkTotalTitle(metric)} outTitle={systemNetworkTotalTitle(metric)} />;
       case "actions": return <HostActionButtons
         host={host} onEdit={openEdit} onDelete={setDeletingHostId} onUpgrade={requestAgentUpgrade}
@@ -2254,15 +2259,30 @@ function HostsContent() {
       />;
     }
   };
+  const themePageValues: ThemeValues = {
+    "site.title": systemSettings?.siteTitle || "ForwardX", "site.version": systemSettings?.version || null,
+    "viewer.name": user?.name || user?.username || null, "viewer.role": user?.role || null,
+    "fleet.total": effectiveHostSummary?.totalHosts ?? displayedHostTotal,
+    "fleet.online": effectiveHostSummary?.onlineHosts ?? onlineCount,
+    "fleet.offline": Math.max(0, (effectiveHostSummary?.totalHosts ?? displayedHostTotal) - (effectiveHostSummary?.onlineHosts ?? onlineCount)),
+    "fleet.networkInSpeed": effectiveHostSummary?.currentTrafficIn ?? null, "fleet.networkOutSpeed": effectiveHostSummary?.currentTrafficOut ?? null,
+    "fleet.trafficIn": effectiveHostSummary?.totalTrafficIn ?? null, "fleet.trafficOut": effectiveHostSummary?.totalTrafficOut ?? null,
+  };
+  const themeSectionStyle = (section: "intro" | "summary" | "groups" | "list" | "outro") => themeHosts?.sections ? { order: themeHosts.sections.indexOf(section) } : undefined;
+  const themeGridConfigured = !!themeHosts && !!(themeHosts.cardLayout || themeHosts.columns || themeHosts.gap !== undefined);
+  const themeGridProps = {
+    "data-theme-part": "host-grid",
+    "data-theme-host-grid": themeGridConfigured ? "true" : undefined,
+    style: themeGridConfigured ? { ...themeColumnStyles(themeHosts?.cardLayout === "rows" ? { mobile: 1, tablet: 1, desktop: 1 } : themeHosts?.columns), gap: themeHosts?.gap ?? 16 } : undefined,
+  };
   return (
-    <div className="space-y-6">
+    <div data-theme-part="hosts" className="space-y-4">
       {/* Header */}
-      <div className="pearl-page-header flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div data-theme-part="hosts-toolbar" className="pearl-page-header flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight">{translateText("主机管理")}</h1>
-        </div>
-        <div className="responsive-actions grid min-w-0 w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
-          <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
+          <h1 className="text-xl font-semibold sm:text-2xl">{themeText(themeHosts?.title, getLanguage(), translateText("主机管理"))}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
             <Server className="h-3 w-3 text-chart-2" />
             <AnimatedStatValue
               value={translateText("{0} / {1} 在线", [onlineCount, displayedHostTotal])}
@@ -2270,13 +2290,15 @@ function HostsContent() {
               cacheKey="hosts.header.online"
               fallbackValue={translateText("0 / 0 在线")}
             />
-          </Badge>
-          {/* 布局切换按钮 */}
+          </span>
           {updateCount > 0 && (
-            <Badge variant="outline" className="justify-center gap-1.5 border-amber-500/30 px-3 py-1.5 text-xs text-amber-500">
+            <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
               <AlertTriangle className="h-3 w-3" />
-              {updateCount}{translateText(" 台发现新版本")}</Badge>
+              {updateCount}{translateText(" 台发现新版本")}</span>
           )}
+          </div>
+        </div>
+        <div className="responsive-actions pearl-toolbar grid min-w-0 w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
           {activeManageTab === "hosts" && (
             <>
               <div className="col-span-2 grid min-w-0 grid-cols-3 gap-1.5 sm:contents">
@@ -2316,52 +2338,8 @@ function HostsContent() {
                   </>
                 )}
               </div>
-              <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-                <Button
-                  variant={viewMode === "compact-card" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title={translateText("精简卡片")}
-                  onClick={() => handleViewModeChange("compact-card")}
-                >
-                  <Rows3 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "card" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title={translateText("标准卡片")}
-                  onClick={() => handleViewModeChange("card")}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "table" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title={translateText("列表视图")}
-                  onClick={() => handleViewModeChange("table")}
-                >
-                  <List className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "map" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="hidden h-8 w-8 rounded-none md:inline-flex"
-                  title={translateText("3D 地球视图")}
-                  onClick={() => handleViewModeChange("map")}
-                >
-                  <Globe className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "flat-map" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="hidden h-8 w-8 rounded-none md:inline-flex"
-                  title={translateText("平面地图视图")}
-                  onClick={() => handleViewModeChange("flat-map")}
-                >
-                  <MapPinned className="h-4 w-4" />
-                </Button>
+              <div className="hidden sm:block">
+                <HostViewSelect value={viewMode} onChange={handleViewModeChange} />
               </div>
             </>
           )}
@@ -2440,12 +2418,13 @@ function HostsContent() {
         </div>
       </div>
 
-      <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
-        <div className="flex items-center gap-2">
+      <div className="pearl-toolbar grid gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+        <div className="hidden items-center gap-2 sm:flex">
           <Filter className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">{translateText("筛选:")}</span>
         </div>
-        <div className="relative w-full sm:w-[260px] lg:w-[320px]">
+        <div className="flex items-center gap-2 sm:contents">
+        <div className="relative min-w-0 flex-1 sm:w-[260px] sm:flex-none lg:w-[320px]">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={activeManageSearchQuery}
@@ -2467,9 +2446,22 @@ function HostsContent() {
             </button>
           ) : null}
         </div>
+        {activeManageTab === "hosts" && !isHostMapView ? (
+          <MobileFilterToggle open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen} />
+        ) : (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground sm:hidden">
+            {activeManageFilterStats.filtered} / {activeManageFilterStats.total} {activeManageFilterConfig.unit}
+          </span>
+        )}
+        </div>
+        <div className={mobileFilterPanelClass(mobileFiltersOpen && activeManageTab === "hosts" && !isHostMapView)}>
         <span className="text-xs tabular-nums text-muted-foreground">
           {activeManageFilterStats.filtered} / {activeManageFilterStats.total} {activeManageFilterConfig.unit}
         </span>
+        {activeManageTab === "hosts" && themeHosts?.showSummary !== false && (
+          <SummaryToggle collapsed={summaryCollapsed} onCollapsedChange={setSummaryCollapsed} className="justify-self-start sm:ml-auto" />
+        )}
+        </div>
       </div>
 
       <Tabs
@@ -2479,9 +2471,12 @@ function HostsContent() {
       >
         <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} onValueChange={setActiveManageTab} ariaLabel={translateText("主机管理")} minItemWidthRem={7.5} />
 
-        <TabsContent value="hosts" className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <TabsContent value="hosts" data-theme-part="hosts-page" data-theme-hosts-configured={themeHosts ? "true" : undefined} className="space-y-4">
+        {themeHosts?.intro && <div data-theme-part="hosts-intro" style={themeSectionStyle("intro")}><ThemeBlocks node={themeHosts.intro} values={themePageValues} /></div>}
+        {themeHosts?.showSummary !== false && <div data-theme-part="hosts-summary" style={themeSectionStyle("summary")} className={cn("grid grid-cols-2 gap-3 xl:grid-cols-3", summaryCollapsed && "hidden")}>
+          {/* Phones already show the online count under the page title. */}
           <HostSummaryCard
+            className="hidden sm:block"
             title={translateText("在线状态")}
             value={`${effectiveHostSummary?.onlineHosts ?? onlineCount} / ${effectiveHostSummary?.totalHosts ?? filteredDisplayHosts.length}`}
             subtitle={effectiveHostSummary
@@ -2493,18 +2488,14 @@ function HostsContent() {
               })()
               : translateText("暂无统计")}
             icon={Server}
-            leadingIcon={CircleCheck}
-            tone="bg-gradient-to-br from-emerald-500 to-emerald-600"
             loading={isEffectiveHostSummaryLoading && !effectiveHostSummary}
             cacheKey="hosts.summary.online"
           />
           <HostTrafficSummaryCard
             title={translateText("当前瞬时流量")}
-            inValue={formatBytesPerSecond(effectiveHostSummary?.currentTrafficIn)}
-            outValue={formatBytesPerSecond(effectiveHostSummary?.currentTrafficOut)}
+            inValue={formatOptionalBytesPerSecond(effectiveHostSummary?.currentTrafficIn)}
+            outValue={formatOptionalBytesPerSecond(effectiveHostSummary?.currentTrafficOut)}
             icon={ActivitySquare}
-            tone="bg-gradient-to-br from-chart-1/10 to-transparent"
-            iconTone="bg-chart-1/10 text-chart-1"
             loading={isEffectiveHostSummaryLoading && !effectiveHostSummary}
             cacheKey="hosts.summary.currentTraffic"
             animated={false}
@@ -2514,13 +2505,12 @@ function HostsContent() {
             inValue={formatBytes(effectiveHostSummary?.totalTrafficIn)}
             outValue={formatBytes(effectiveHostSummary?.totalTrafficOut)}
             icon={ArrowRightLeft}
-            tone="bg-gradient-to-br from-chart-4/10 to-transparent"
-            iconTone="bg-chart-4/10 text-chart-4"
             loading={isEffectiveHostSummaryLoading && !effectiveHostSummary}
             cacheKey="hosts.summary.totalTraffic"
           />
-        </div>
+        </div>}
         {user?.role === "admin" && (
+          <div data-theme-part="hosts-groups" style={themeSectionStyle("groups")}>
           <HostGroupFilterBar
             groups={hostGroups as HostGroupView[]}
             totalHosts={Number(hostPageQuery.data?.scopeTotalItems || 0)}
@@ -2528,8 +2518,10 @@ function HostsContent() {
             selectedGroupId={selectedHostGroupId}
             onSelectGroup={setSelectedHostGroupId}
           />
+          </div>
         )}
       {/* Content */}
+      <div data-theme-part="hosts-list" className="min-w-0 space-y-4" style={themeSectionStyle("list")}>
       {isInitialLoadingWithoutCache ? (
         <DataSectionLoading label={translateText("正在加载主机数据")} minHeight="min-h-[260px]" />
       ) : isError ? (
@@ -2588,6 +2580,7 @@ function HostsContent() {
             <SortableReorderContext sortable={hostSortable} ids={pagedHostIds} strategy="rect">
               <div
                 key={`host-card-mode-sortable-${hostCardListMotionKey}`}
+                {...themeGridProps}
                 className={viewMode === "compact-card" ? "standard-card-grid-compact gap-3" : "standard-card-grid gap-4"}
               >
                 {pagedHosts.map((host) => (
@@ -2608,6 +2601,7 @@ function HostsContent() {
           ) : (
             <AutoAnimateContainer
               key={`host-card-mode-${hostCardListMotionKey}`}
+              {...themeGridProps}
               duration={220}
               layout={false}
               className={
@@ -2712,13 +2706,15 @@ function HostsContent() {
                 <Server className="h-8 w-8 opacity-40" />
               </div>
               <p className="text-lg font-medium">{isHostTextFiltered ? translateText("未找到匹配主机") : isHostGroupFiltered ? translateText("当前分组暂无主机") : translateText("暂无主机")}</p>
-              <p className="text-sm mt-1 text-muted-foreground/60">
+              <p className="text-sm mt-1 text-muted-foreground/80">
                 {isHostTextFiltered ? translateText("调整筛选内容或清空搜索") : isHostGroupFiltered ? translateText("可以在分组管理中为该分组添加主机") : user?.role === "admin" ? translateText("点击添加主机生成 Agent 安装命令") : translateText("请联系管理员添加主机")}
               </p>
             </div>
           </CardContent>
         </Card>
       )}
+        </div>
+        {themeHosts?.outro && <div data-theme-part="hosts-outro" style={themeSectionStyle("outro")}><ThemeBlocks node={themeHosts.outro} values={themePageValues} /></div>}
         </TabsContent>{user?.role === "admin" && (
           <TabsContent value="tokens" className="space-y-4">
             <AgentTokenManager
@@ -3140,6 +3136,9 @@ function HostsContent() {
                   </div>
                   {user?.role === "admin" ? (
                     <>
+                      <HostAgentPanelUrlSetting enabled={form.agentPanelUrlEnabled} value={form.agentPanelUrl}
+                        onEnabledChange={(agentPanelUrlEnabled) => setForm({ ...form, agentPanelUrlEnabled })}
+                        onChange={(agentPanelUrl) => setForm({ ...form, agentPanelUrl })} />
                       <div className="grid min-w-0 grid-cols-2 gap-2.5 px-1">
                         <div className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
                           <Label className="text-sm">{translateText("机器购买时间")}</Label>

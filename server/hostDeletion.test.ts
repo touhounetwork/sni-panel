@@ -97,7 +97,7 @@ test("member removal synchronizes templates, preserves healthy siblings and safe
       const { hostsRouter } = await mod("server/routers/hosts.ts");
       const caller = hostsRouter.createCaller({ user: { id: 99, role: "user" }, req: { headers: {} }, res: {} });
       for (const action of ["prepareDelete", "deleteImpact", "delete"]) {
-        await assert.rejects(() => caller[action]({ id: 3 }), /无权操作/);
+        await assert.rejects(() => caller[action]({ id: 3 }), { code: "FORBIDDEN" });
       }
       assert.deepEqual(await runtime.queryRaw('SELECT "id" FROM "hosts" WHERE "id" = 3'), [{ id: 3 }]);
       await group(12, [member(4)], "entry");
@@ -128,16 +128,19 @@ test("member removal synchronizes templates, preserves healthy siblings and safe
       await insert("forward_groups", { id: 30, name: "secret-other-user-group", userId: 2, groupMode: "entry", groupType: "host", targetIp: "203.0.113.50", targetPort: 443, isEnabled: 0 });
       await insert("forward_group_members", { groupId: 30, memberType: "host", hostId: 18 });
       await insert("tunnels", { id: 30, name: "secret-other-user-tunnel", userId: 2, entryHostId: 18, exitHostId: 24, listenPort: 19800, isEnabled: 0 });
-      const owner = hostsRouter.createCaller({ user: { id: 1, role: "user" }, req: { headers: {} }, res: {} });
-      const privateImpact = await owner.deleteImpact({ id: 18 });
-      assert.equal(privateImpact.blocked, true);
-      for (const refs of [privateImpact.rules, privateImpact.groups, privateImpact.tunnels]) {
-        assert.equal(refs.count, 1); assert.equal(refs.hiddenCount, 1); assert.deepEqual(refs.items, []);
+      // Host deletion is admin-only: the owner of the host is refused before any read,
+      // and an administrator sees every dependency, including other users'.
+      const ordinaryOwner = hostsRouter.createCaller({ user: { id: 1, role: "user" }, req: { headers: {} }, res: {} });
+      for (const action of ["prepareDelete", "deleteImpact", "delete"]) {
+        await assert.rejects(() => ordinaryOwner[action]({ id: 18, confirmOfflineCleanup: true }), { code: "FORBIDDEN" });
       }
-      assert.doesNotMatch(JSON.stringify(privateImpact), /secret-other-user/);
-      await assert.rejects(() => owner.delete({ id: 18, confirmOfflineCleanup: true }), error => {
-        assert.match(error.message, /关联配置/); assert.doesNotMatch(error.message, /secret-other-user/); return true;
-      });
+      const owner = hostsRouter.createCaller({ user: { id: 1, role: "admin" }, req: { headers: {} }, res: {} });
+      const adminImpact = await owner.deleteImpact({ id: 18 });
+      assert.equal(adminImpact.blocked, true);
+      for (const refs of [adminImpact.rules, adminImpact.groups, adminImpact.tunnels]) {
+        assert.equal(refs.count, 1); assert.equal(refs.hiddenCount, 0); assert.equal(refs.items.length, 1);
+      }
+      await assert.rejects(() => owner.delete({ id: 18, confirmOfflineCleanup: true }), /关联配置|secret-other-user/);
 
       // Queries never repair stale metadata. An unauthorized preparation cannot repair either.
       await group(31, [member(20)]);
@@ -145,20 +148,8 @@ test("member removal synchronizes templates, preserves healthy siblings and safe
       await runtime.executeRaw('UPDATE "forward_rules" SET "hostId" = 19 WHERE "id" = 810');
       await owner.deleteImpact({ id: 19 });
       assert.deepEqual(await runtime.queryRaw('SELECT "hostId" FROM "forward_rules" WHERE "id" = 810'), [{ hostId: 19 }]);
-      await assert.rejects(() => caller.prepareDelete({ id: 19 }), /无权/);
-      assert.deepEqual(await runtime.queryRaw('SELECT "hostId" FROM "forward_rules" WHERE "id" = 810'), [{ hostId: 19 }]);
-
-      // Recheck ownership after waiting for a concurrent member save, before repairing.
-      const { withGroupMemberMutation } = await mod("server/groupMemberMutation.ts");
-      let unlock, acquired;
-      const entered = new Promise(resolve => { acquired = resolve; });
-      const hold = withGroupMemberMutation(async () => { acquired(); await new Promise(resolve => { unlock = resolve; }); });
-      await entered;
-      const queued = owner.prepareDelete({ id: 19 });
-      const rejected = assert.rejects(queued, /无权/);
-      await new Promise(resolve => setTimeout(resolve, 20));
-      await runtime.executeRaw('UPDATE "hosts" SET "userId" = 99 WHERE "id" = 19');
-      unlock(); await hold; await rejected;
+      // An ordinary user's preparation is refused and cannot repair either.
+      for (const refused of [caller, ordinaryOwner]) await assert.rejects(() => refused.prepareDelete({ id: 19 }), { code: "FORBIDDEN" });
       assert.deepEqual(await runtime.queryRaw('SELECT "hostId" FROM "forward_rules" WHERE "id" = 810'), [{ hostId: 19 }]);
 
       // An offline consent does not survive a newly online host or a new live reference.
@@ -461,10 +452,10 @@ test("host deletion removes only finalized rules' personal memberships and keeps
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("deletion preview and mutation enforce host ownership and UI cannot force-delete actual dependencies", () => {
+test("deletion preview and mutation require administrators and UI cannot force-delete actual dependencies", () => {
   const source = fs.readFileSync("server/routers/hosts.ts", "utf8");
   for (const name of ["prepareDelete", "deleteImpact", "delete"]) {
-    const start = source.indexOf(`    ${name}: protectedProcedure`);
+    const start = source.indexOf(`    ${name}: adminProcedure`);
     assert.ok(start >= 0);
     const block = source.slice(start, source.indexOf("      }),", start));
     assert.match(block, /ctx.user.role !== "admin" && host.userId !== ctx.user.id/);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import * as runtime from "./dbRuntime";
 import * as db from "./db";
 import { ensureDatabaseSchema } from "./dbSchema";
@@ -6,6 +7,7 @@ import { hostsRouter } from "./routers/hosts";
 import { hostChinaHealthSchema, ipSwitchHookSchema } from "../shared/hostChinaHealth";
 import { observeProbeHealth, getProbeHealthViews, saveProbeHealth, validateIpSwitchClaim, acknowledgeIpSwitch } from "./hostProbeHealth";
 import { hostIngressAddress } from "./hostAddressRuntime";
+import { observeIpSwitchAddress } from "./hostIpSwitchObservation";
 import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { rulesRouter } from "./routers/rules";
 import { getDirectSniReadyPorts } from "./sniDirectRuntime";
@@ -16,14 +18,14 @@ import { agentEncryptionMiddleware } from "./agentEncryptionMiddleware";
 import { encryptPayload, decryptPayload } from "./agentCrypto";
 import { panelCryptoNowMs } from "./panelClock";
 import { recordIpSwitchAgentCapability, hasQueuedIpSwitchAgentTasks, takeIpSwitchAgentTasks } from "./agentIpSwitchTasks";
+import { getAllSettings, setSettings } from "./repositories/settingsRepository";
 
 await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB! } });
 let http: ReturnType<ReturnType<typeof express>["listen"]> | undefined;
 try {
   await ensureDatabaseSchema();
   for (const id of [1, 2]) await runtime.insertAndGetId("users", { id, username: `user-${id}`, password: "test", name: `User ${id}`, role: id === 1 ? "admin" : "user" });
-  for (const id of [1, 2, 3, 4, 5, 6, 7, 8, 9]) await runtime.insertAndGetId("hosts", { id, name: `Host ${id}`, ip: "1.1.1.1", ipv4: "1.1.1.1", agentToken: `test-token-${id}`, userId: 2,
-    isOnline: true, lastHeartbeat: Math.floor(Date.now() / 1000), agentVersion: "3.4.0" });
+  for (const id of [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14]) await runtime.insertAndGetId("hosts", { id, name: `Host ${id}`, ip: id === 14 ? "" : "1.1.1.1", ...(id === 11 || id === 12 ? { entryIp: "8.8.8.8" } : {}), agentToken: `test-token-${id}`, userId: 1 });
   const caller = (id: number, role: string) => hostsRouter.createCaller({ user: { id, role }, req: { headers: {}, socket: {} }, res: {}, authSession: null, authFailureReason: null } as any);
   const admin = caller(1, "admin"), user = caller(2, "user");
   const hook = ipSwitchHookSchema.parse({ url: "http://10.0.0.1/api/changeip?token=private-provider-secret", successMode: "http" });
@@ -37,15 +39,32 @@ try {
   const view = (await admin.probeServices()).find((item: any) => item.id === id)!.health;
   assert.equal(view.hookConfigured, true); assert.doesNotMatch(JSON.stringify(view), /private-provider-secret|hookCiphertext|10\.0\.0\.1/);
   assert.deepEqual(await user.probeServices(), []);
+  await assert.rejects(user.probeServiceIpSwitchHook({ serviceId: id }), (error: any) => error.code === "FORBIDDEN");
+  await assert.rejects(admin.probeServiceIpSwitchHook({ serviceId: 99999 }), (error: any) => error.code === "NOT_FOUND");
+  const oldFetch = globalThis.fetch;
+  let providerReads = 0;
+  try {
+    globalThis.fetch = async () => { providerReads++; throw new Error("Viewing/saving must not send requests"); };
+    assert.deepEqual(await admin.probeServiceIpSwitchHook({ serviceId: id }), hook);
+    const editedHook = { ...hook, method: "POST" as const, headers: { Authorization: "Bearer edited-secret" }, body: "edited-body-secret", timeoutSeconds: 30 };
+    await admin.updateProbeService({ ...serviceInput, id, health: { ...health, hook: editedHook } });
+    assert.deepEqual(await admin.probeServiceIpSwitchHook({ serviceId: id }), editedHook);
+    assert.doesNotMatch(JSON.stringify(await admin.probeServices()), /private-provider-secret|edited-secret|edited-body-secret|hookCiphertext/);
+    await admin.updateProbeService({ ...serviceInput, id });
+    assert.equal(providerReads, 0);
+  } finally { globalThis.fetch = oldFetch; }
   // An unrelated update (e.g. pause) must preserve saved provider credentials.
   await admin.updateProbeService({ ...serviceInput, id, health: undefined });
-  assert.equal((await runtime.queryRaw<any>("SELECT hookCiphertext FROM host_probe_health WHERE serviceId = ?", [id]))[0].hookCiphertext, stored.hookCiphertext);
+  assert.deepEqual(await admin.probeServiceIpSwitchHook({ serviceId: id }), hook);
   await assert.rejects(admin.createProbeService({ ...serviceInput, hostIds: [1, 2] }), /一台特定/);
   await assert.rejects(admin.createProbeService({ ...serviceInput, targetIp: "localhost" }), /固定公网 IP/);
   const base = Math.floor(Date.now() / 1000), host = (await db.getHostById(1))!;
+  // Production TCPing auth supplies only this identity, without ANY address.
+  const compactHost = { id: host.id, name: host.name, agentInstallationId: "" };
   let calls = 0, notices = 0, ready = false;
   const deps = { ready: () => ready, notify: async () => { notices++; }, request: async (_hook: any, context: any) => {
     calls++;
+    assert.equal(context.ip, hostIngressAddress(host));
     assert.equal(await validateIpSwitchClaim(1, id, context.incidentId, hostIngressAddress(host)), true);
     assert.equal(await validateIpSwitchClaim(2, id, context.incidentId, hostIngressAddress(host)), false);
     assert.equal(await validateIpSwitchClaim(1, id, context.incidentId, "8.8.8.8"), false);
@@ -56,13 +75,13 @@ try {
   await observeProbeHealth(host, [{ ...report, targetIp: "8.8.8.8" }, { ...report, method: "ping" }], base, deps);
   await observeProbeHealth(host, [{ ...report, probeSuccesses: -1 }], base, deps);
   assert.equal((await getProbeHealthViews([id])).get(id).state, null);
-  for (const offset of [0, 15, 30]) await observeProbeHealth(host, [report], base + offset, deps);
+  for (const offset of [0, 15, 30]) await observeProbeHealth(compactHost, [report], base + offset, deps);
   assert.equal((await getProbeHealthViews([id])).get(id).state.phase, "unhealthy"); assert.equal(calls, 0);
+  assert.equal((await getProbeHealthViews([id])).get(id).state.actionBlockedReason, "agent_unavailable");
   ready = true;
   // No human reply or approval: a capable Agent immediately receives the action.
-  await observeProbeHealth(host, [report], base + 45, deps);
+  await observeProbeHealth(compactHost, [report], base + 45, deps);
   assert.equal(calls, 1); assert.equal((await getProbeHealthViews([id])).get(id).lastAction.status, "accepted");
-  assert.equal((await db.getHostById(1))!.entryIp, null, "the default action does not write a manual ingress");
   await observeProbeHealth(host, [report, report], base + 60, deps); assert.equal(calls, 1);
   for (const offset of [75, 90]) await observeProbeHealth(host, [{ ...report, probeSuccesses: 3 }], base + offset, deps);
   assert.equal((await getProbeHealthViews([id])).get(id).state.phase, "healthy");
@@ -91,97 +110,104 @@ try {
   await acknowledgeIpSwitch(second.id);
   assert.equal((await getProbeHealthViews([second.id])).get(second.id).lastAction.acknowledged, true);
 
-  // Provider success followed by runtime sync failure must not be shown as fully synced.
+  // A provider's claimed new IP is not proof and must not change panel addresses.
   const third = await admin.createProbeService({ ...serviceInput, hostIds: [3], health: { ...health, hook: { ...hook, ipPath: "ip", updateAddress: "entry" } } });
   const host3 = (await db.getHostById(3))!, report3 = { ...report, serviceId: third.id };
-  for (const offset of [0, 15, 30]) await observeProbeHealth(host3, [report3], base + offset, { ...deps,
+  for (const offset of [0, 15, 30]) await observeProbeHealth({ id: host3.id, name: host3.name }, [report3], base + offset, { ...deps,
     request: async (_hook, context) => ({ taskId: context.incidentId, outcome: "accepted", reason: "ok", newIp: "8.8.4.4" }),
     refresh: async () => { throw new Error("runtime_sync_failed"); },
   });
+  assert.equal((await getProbeHealthViews([third.id])).get(third.id).lastAction.status, "accepted");
+  assert.equal((await db.getHostById(3))!.entryIp, null);
+  assert.equal((await getProbeHealthViews([third.id])).get(third.id).lastAction.newIp, null);
+  // The Agent's actual observation confirms even a different IP than the response.
+  await db.updateHostHeartbeat(3, { ip: "9.9.9.9", ipv4: "9.9.9.9" } as any);
+  await db.updateHost(3, { lastHeartbeat: new Date((base + 31) * 1000) });
+  const changedHost3 = (await db.getHostById(3))!;
+  assert.equal(await observeIpSwitchAddress(changedHost3, { refresh: async () => { throw new Error("runtime_sync_failed"); } }), false);
   assert.equal((await getProbeHealthViews([third.id])).get(third.id).lastAction.status, "sync_failed");
-  assert.equal((await db.getHostById(3))!.entryIp, "8.8.4.4");
-  assert.equal((await db.getHostById(3))!.tunnelEntryIp, null, "entry-only synchronization never changes the tunnel address");
-  assert.equal((await db.getHostById(3))!.ipv4, "1.1.1.1", "the vendor response is not an Agent primary-IP report");
+  assert.equal((await getProbeHealthViews([third.id])).get(third.id).lastAction.newIp, "9.9.9.9");
+  let retrySync = 0;
+  assert.equal(await observeIpSwitchAddress(changedHost3, { refresh: async () => { retrySync++; }, notify: async () => {} }), true);
+  assert.equal(retrySync, 1);
+  assert.equal((await getProbeHealthViews([third.id])).get(third.id).lastAction.status, "succeeded");
+  assert.equal(await observeIpSwitchAddress(changedHost3, { refresh: async () => { retrySync++; } }), false);
+  assert.equal(retrySync, 1, "successful observations are idempotent");
 
-  // A real chain and a direct resource share a complete splitter table. Changing
-  // a downstream address invalidates that table, while unrelated tables and an
-  // unchanged exit configuration retain their confirmation.
-  const context = { user: { id: 1, role: "admin", accountEnabled: true }, req: { headers: {}, socket: {} }, res: {}, authSession: null, authFailureReason: null } as any;
-  const groups = forwardGroupsRouter.createCaller(context), rules = rulesRouter.createCaller(context);
-  const common = { groupType: "host" as const, forwardType: "gost" as const, protocol: "tcp" as const, isEnabled: true,
-    failoverSeconds: 10, recoverSeconds: 10, ddnsAutoResolveEnabled: false };
-  const entry = await groups.create({ ...common, name: "Swap entry", groupMode: "entry", domain: "swap.example.test", members: [{ memberType: "host", hostId: 6 }] });
-  const direct = await groups.create({ ...common, name: "Shared direct", groupMode: "port", entryGroupId: entry.id, members: [] });
-  const chain = await groups.create({ ...common, name: "Address chain", groupMode: "chain", members: [6, 7].map(hostId => ({ memberType: "host" as const, hostId })) });
-  const independent = await groups.create({ ...common, name: "Unrelated entry", groupMode: "failover", members: [{ memberType: "host", hostId: 8 }] });
-  await rules.create({ forwardGroupId: direct.id, name: "Shared direct", sourcePort: 18443, targetIp: "203.0.113.60", targetPort: 443, sni: "direct.swap.test", isEnabled: true });
-  await rules.create({ forwardGroupId: chain.id, name: "Chain route", sourcePort: 18443, targetIp: "203.0.113.70", targetPort: 443, sni: "chain.swap.test", isEnabled: true });
-  await rules.create({ forwardGroupId: independent.id, name: "Unaffected route", sourcePort: 18443, targetIp: "203.0.113.80", targetPort: 443, sni: "unrelated.swap.test", isEnabled: true });
-  const snapshot = async (hostId: number, observedAt = Date.now()) => {
-    const rows = (await db.getForwardRulesForAgent(hostId) as any[]).filter(rule => rule.sni && rule.isEnabled && !rule.pendingDelete);
-    recordSniRuntimeSnapshot(hostId, rows.map(rule => ({ port: rule.sourcePort, ruleId: rule.id, sni: rule.sni,
-      targetIp: rule.targetIp, targetPort: rule.targetPort, forwardType: "forwardx", protocol: "tcp", ready: true, sniRouteVersion: 1,
-      sourceAllowIps: [], maxIPs: 0, limitIn: 0, limitOut: 0, maxConnections: 0,
-      accessScope: Number(rule.forwardGroupId) === chain.id && hostId === 6 ? "" : `u1_h${hostId}` })), observedAt);
-  };
-  for (const hostId of [6, 7, 8]) await snapshot(hostId, Date.now() - 20_000);
-  assert.equal((await getDirectSniReadyPorts(6)).has(18443), true);
-  const unrelatedConfirmation = getSniRuntimeGroupStatus(8, 18443)!.confirmedAt;
-  const seventh = await admin.createProbeService({ ...serviceInput, name: "SNI address sync", hostIds: [7],
-    health: { ...health, hook: { ...hook, ipPath: "ip", updateAddress: "entry_and_tunnel" } } });
-  const host7 = (await db.getHostById(7))!;
-  for (const offset of [0, 15, 30]) await observeProbeHealth(host7, [{ ...report, serviceId: seventh.id }], base + offset, { ...deps,
-    request: async (_hook, context) => ({ taskId: context.incidentId, outcome: "accepted", reason: "ok", newIp: "8.8.4.4" }),
-  });
-  assert.equal((await getProbeHealthViews([seventh.id])).get(seventh.id).lastAction.status, "succeeded");
-  const synchronizedHost = (await db.getHostById(7))!;
-  assert.equal(synchronizedHost.entryIp, "8.8.4.4"); assert.equal(synchronizedHost.tunnelEntryIp, "8.8.4.4");
-  assert.equal(synchronizedHost.ipv4, "1.1.1.1"); assert.equal(synchronizedHost.ip, "1.1.1.1");
-  const changedRoute = (await db.getForwardRulesForAgent(6) as any[]).find(rule => rule.sni === "chain.swap.test");
-  assert.equal(changedRoute.targetIp, "8.8.4.4");
-  assert.ok(sniRuntimeConfirmationBoundary(6) > 0);
-  assert.equal(getSniRuntimeGroupStatus(6, 18443)!.confirmedAt, 0);
-  assert.equal((await getDirectSniReadyPorts(6)).has(18443), false, "the old complete table cannot confirm the new next hop");
-  assert.equal(getSniRuntimeGroupStatus(8, 18443)!.confirmedAt, unrelatedConfirmation);
-  assert.equal(sniRuntimeConfirmationBoundary(7), 0, "an unchanged exit table does not gain a destination-probe requirement");
-  assert.match(String((await db.getForwardGroupById(entry.id))!.lastMessage), /确认|生效|等待|健康|解析/);
-  await snapshot(6, Date.now() + 1);
-  assert.equal((await getDirectSniReadyPorts(6)).has(18443), true, "a complete new report restores both shared resources without any destination probe");
-  assert.deepEqual(getSniRuntimeGroupStatus(6, 18443)!.appliedDomains, ["chain.swap.test", "direct.swap.test"]);
-  const { mock } = await import("node:test");
-  mock.timers.enable({ apis: ["Date"], now: Date.now() + 2 });
-  try {
-    await db.runForwardGroupFailover(entry.id);
-    assert.notEqual((await db.getForwardGroupById(entry.id))!.lastStatus, "healthy", "new confirmation does not borrow the old recovery window");
-    mock.timers.tick(11_000);
-    await db.runForwardGroupFailover(entry.id);
-    assert.equal((await db.getForwardGroupById(entry.id))!.lastStatus, "healthy");
-    assert.equal((await db.getForwardGroupById(entry.id))!.lastDdnsValue, "1.1.1.1", "the existing group policy recommends the confirmed entry after recovery waiting");
-  } finally { mock.timers.reset(); }
+  // Local SNI rule (ADR-0006): a confirmed IP switch on a downstream SNI host
+  // invalidates the complete splitter table that routes to it; unrelated tables
+  // and an unchanged exit keep their confirmation, and group DNS still waits for
+  // the existing entry-health policy instead of trusting the switch.
+  for (const id of [20, 21, 22]) await runtime.insertAndGetId("hosts", { id, name: `SNI host ${id}`, ip: "1.1.1.1", ipv4: "1.1.1.1", agentToken: `test-token-${id}`, userId: 1,
+    isOnline: true, lastHeartbeat: new Date((base - 60) * 1000), agentVersion: "3.10.0" });
+  {
+    const context = { user: { id: 1, role: "admin", accountEnabled: true }, req: { headers: {}, socket: {} }, res: {}, authSession: null, authFailureReason: null } as any;
+    const groups = forwardGroupsRouter.createCaller(context), rules = rulesRouter.createCaller(context);
+    const common = { groupType: "host" as const, forwardType: "gost" as const, protocol: "tcp" as const, isEnabled: true,
+      failoverSeconds: 10, recoverSeconds: 10, ddnsAutoResolveEnabled: false };
+    const entry = await groups.create({ ...common, name: "Swap entry", groupMode: "entry", domain: "swap.example.test", members: [{ memberType: "host", hostId: 20 }] });
+    const direct = await groups.create({ ...common, name: "Shared direct", groupMode: "port", entryGroupId: entry.id, members: [] });
+    const chain = await groups.create({ ...common, name: "Address chain", groupMode: "chain", members: [20, 21].map(hostId => ({ memberType: "host" as const, hostId })) });
+    const independent = await groups.create({ ...common, name: "Unrelated entry", groupMode: "failover", members: [{ memberType: "host", hostId: 22 }] });
+    await rules.create({ forwardGroupId: direct.id, name: "Shared direct", sourcePort: 18443, targetIp: "203.0.113.60", targetPort: 443, sni: "direct.swap.test", isEnabled: true });
+    await rules.create({ forwardGroupId: chain.id, name: "Chain route", sourcePort: 18443, targetIp: "203.0.113.70", targetPort: 443, sni: "chain.swap.test", isEnabled: true });
+    await rules.create({ forwardGroupId: independent.id, name: "Unaffected route", sourcePort: 18443, targetIp: "203.0.113.80", targetPort: 443, sni: "unrelated.swap.test", isEnabled: true });
+    const snapshot = async (hostId: number, observedAt = Date.now()) => {
+      const rows = (await db.getForwardRulesForAgent(hostId) as any[]).filter(rule => rule.sni && rule.isEnabled && !rule.pendingDelete);
+      recordSniRuntimeSnapshot(hostId, rows.map(rule => ({ port: rule.sourcePort, ruleId: rule.id, sni: rule.sni,
+        targetIp: rule.targetIp, targetPort: rule.targetPort, forwardType: "forwardx", protocol: "tcp", ready: true, sniRouteVersion: 1,
+        sourceAllowIps: [], maxIPs: 0, limitIn: 0, limitOut: 0, maxConnections: 0,
+        accessScope: Number(rule.forwardGroupId) === chain.id && hostId === 20 ? "" : `u1_h${hostId}` })), observedAt);
+    };
+    for (const hostId of [20, 21, 22]) await snapshot(hostId, Date.now() - 20_000);
+    assert.equal((await getDirectSniReadyPorts(20)).has(18443), true);
+    const unrelatedConfirmation = getSniRuntimeGroupStatus(22, 18443)!.confirmedAt;
+    const sniSwitch = await admin.createProbeService({ ...serviceInput, name: "SNI address sync", hostIds: [21] });
+    for (const offset of [0, 15, 30]) await observeProbeHealth((await db.getHostById(21))!, [{ ...report, serviceId: sniSwitch.id }], base + offset, { ...deps,
+      request: async (_hook, ctx) => ({ taskId: ctx.incidentId, outcome: "accepted", reason: "ok" }),
+    });
+    assert.equal((await getProbeHealthViews([sniSwitch.id])).get(sniSwitch.id).lastAction.status, "accepted");
+    // The Agent reports the new address: the real host address handler runs.
+    await db.updateHostHeartbeat(21, { ip: "8.8.4.4", ipv4: "8.8.4.4", lastHeartbeat: new Date((base + 31) * 1000) } as any);
+    assert.equal(await observeIpSwitchAddress((await db.getHostById(21))!, { notify: async () => {} }), true);
+    assert.equal((await getProbeHealthViews([sniSwitch.id])).get(sniSwitch.id).lastAction.status, "succeeded");
+    const changedRoute = (await db.getForwardRulesForAgent(20) as any[]).find(rule => rule.sni === "chain.swap.test");
+    assert.equal(changedRoute.targetIp, "8.8.4.4", "the chain entry now routes to the confirmed new address");
+    assert.ok(sniRuntimeConfirmationBoundary(20) > 0);
+    assert.equal(getSniRuntimeGroupStatus(20, 18443)!.confirmedAt, 0);
+    assert.equal((await getDirectSniReadyPorts(20)).has(18443), false, "the old complete table cannot confirm the new next hop");
+    assert.equal(getSniRuntimeGroupStatus(22, 18443)!.confirmedAt, unrelatedConfirmation);
+    assert.equal(sniRuntimeConfirmationBoundary(21), 0, "an unchanged exit table does not gain a destination-probe requirement");
+    assert.notEqual((await db.getForwardGroupById(entry.id))!.lastStatus, "healthy", "the IP switch never grants entry qualification by itself");
+    await snapshot(20, Date.now() + 1);
+    assert.equal((await getDirectSniReadyPorts(20)).has(18443), true, "a complete new report restores both shared resources");
+    assert.deepEqual(getSniRuntimeGroupStatus(20, 18443)!.appliedDomains, ["chain.swap.test", "direct.swap.test"]);
+  }
 
-  // Changing a touched address while the vendor request is in flight must not
-  // overwrite the newer user input, even if the old ingress is unchanged.
-  const ninth = await admin.createProbeService({ ...serviceInput, name: "Concurrent address edit", hostIds: [9],
-    health: { ...health, hook: { ...hook, ipPath: "ip", updateAddress: "entry_and_tunnel" } } });
-  const host9 = (await db.getHostById(9))!;
-  for (const offset of [0, 15, 30]) await observeProbeHealth(host9, [{ ...report, serviceId: ninth.id }], base + offset, { ...deps,
-    request: async (_hook, context) => {
-      await db.updateHost(9, { tunnelEntryIp: "9.9.9.9" });
-      return { taskId: context.incidentId, outcome: "accepted", reason: "ok", newIp: "8.8.4.4" };
-    }, refresh: async () => assert.fail("a stale result must not refresh or publish the changed configuration"),
-  });
-  assert.equal((await getProbeHealthViews([ninth.id])).get(ninth.id).lastAction.status, "sync_skipped");
-  assert.equal((await db.getHostById(9))!.entryIp, null); assert.equal((await db.getHostById(9))!.tunnelEntryIp, "9.9.9.9");
-  const edited = await admin.createProbeService({ ...serviceInput, name: "Concurrent service edit", hostIds: [9],
-    health: { ...health, maxSwitchesPerDay: 10, hook: { ...hook, ipPath: "ip", updateAddress: "entry" } } });
-  for (const offset of [1000, 1015, 1030]) await observeProbeHealth((await db.getHostById(9))!, [{ ...report, serviceId: edited.id }], base + offset, { ...deps,
-    request: async (_hook, context) => {
-      await admin.updateProbeService({ ...serviceInput, hostIds: [9], id: edited.id, health: { ...health, autoSwitch: false, hook: undefined } });
-      return { taskId: context.incidentId, outcome: "accepted", reason: "ok", newIp: "8.8.4.4" };
-    }, refresh: async () => assert.fail("a service edit in flight must not refresh or publish an outdated action"),
-  });
-  assert.equal((await getProbeHealthViews([edited.id])).get(edited.id).lastAction.status, "sync_skipped");
-  assert.equal((await db.getHostById(9))!.entryIp, null);
+  // Actual heartbeats may arrive before the provider HTTP result, which may fail.
+  await runtime.insertAndGetId("hosts", { id: 15, name: "In-flight switch", ip: "1.1.1.1", ipv4: "1.1.1.1", entryIp: "1.1.1.1", userId: 1 });
+  const inflight = await admin.createProbeService({ ...serviceInput, hostIds: [15] });
+  const host15 = (await db.getHostById(15))!, report15 = { ...report, serviceId: inflight.id };
+  let finishResponse!: (value: any) => void, signalStarted!: () => void, inflightCalls = 0, inflightRefreshes = 0;
+  const requestStarted = new Promise<void>(resolve => { signalStarted = resolve; });
+  const requestResponse = new Promise<any>(resolve => { finishResponse = resolve; });
+  const inflightDeps = { ...deps, request: async (_hook: any, context: any) => {
+    inflightCalls++;
+    assert.equal(await validateIpSwitchClaim(15, inflight.id, context.incidentId, "1.1.1.1"), true);
+    signalStarted();
+    return requestResponse;
+  }};
+  for (const offset of [0, 15]) await observeProbeHealth(host15, [report15], base + offset, inflightDeps);
+  const pendingRequest = observeProbeHealth(host15, [report15], base + 30, inflightDeps);
+  await requestStarted;
+  await db.updateHostHeartbeat(15, { ip: "8.8.4.4", ipv4: "8.8.4.4", lastHeartbeat: new Date((base + 31) * 1000) } as any);
+  assert.equal(await observeIpSwitchAddress((await db.getHostById(15))!, { refresh: async () => { inflightRefreshes++; }, notify: async () => {} }), true);
+  finishResponse({ taskId: "ignored-by-fixture", outcome: "uncertain", reason: "request_failed" });
+  await pendingRequest;
+  const inflightResult = (await getProbeHealthViews([inflight.id])).get(inflight.id).lastAction;
+  assert.equal(inflightResult.status, "succeeded"); assert.equal(inflightResult.newIp, "8.8.4.4");
+  assert.equal(inflightResult.reason, "ip_changed");
+  assert.equal(inflightCalls, 1); assert.equal(inflightRefreshes, 1);
 
   const fourth = await admin.createProbeService({ ...serviceInput, hostIds: [4], intervalSeconds: 300, health: { ...health, autoSwitch: false } });
   await runtime.executeRaw("UPDATE host_probe_health SET state = ? WHERE serviceId = ?", [JSON.stringify({ phase: "healthy", lastSeen: base - 500 }), fourth.id]);
@@ -197,6 +223,77 @@ try {
   await acknowledgeIpSwitch(replacement.id);
   assert.equal((await getProbeHealthViews([replacement.id])).get(replacement.id).blockedAction, null);
 
+  // Definite non-execution used to latch actionAttempted for the whole incident.
+  // Retry only after the configured provider interval, using a new durable ID.
+  const retryService = await admin.createProbeService({ ...serviceInput, name: "Retry after non-execution", hostIds: [6] });
+  const host6 = (await db.getHostById(6))!, report6 = { ...report, serviceId: retryService.id };
+  let retryCalls = 0;
+  const taskIds = new Set<string>();
+  const retryDeps = { ...deps, request: async (_hook: any, context: any) => {
+    retryCalls++; assert.ok(!taskIds.has(context.incidentId)); taskIds.add(context.incidentId);
+    return { taskId: context.incidentId, outcome: retryCalls === 1 ? "not_executed" as const : "accepted" as const, reason: retryCalls === 1 ? "expired" as const : "ok" as const };
+  }};
+  for (const offset of [0, 15, 30]) await observeProbeHealth(host6, [report6], base + offset, retryDeps);
+  const retryView = (await getProbeHealthViews([retryService.id])).get(retryService.id);
+  assert.equal(retryView.lastAction.status, "not_executed"); assert.equal(retryView.lastAction.reason, "expired");
+  assert.equal(retryView.state.actionAttempted, false); assert.equal(retryView.nextSwitchAt, base + 330);
+  for (const offset of [45, 300, 315]) await observeProbeHealth(host6, [report6], base + offset, retryDeps);
+  assert.equal(retryCalls, 1);
+  assert.equal((await getProbeHealthViews([retryService.id])).get(retryService.id).state.actionBlockedReason, "cooldown");
+  await observeProbeHealth(host6, [report6], base + 330, retryDeps);
+  assert.equal(retryCalls, 2);
+  for (const offset of [345, 1000, 1015, 1030]) await observeProbeHealth(host6, [report6], base + offset, retryDeps);
+  assert.equal(retryCalls, 2, "accepted calls never retry within the same unresolved incident");
+
+  // The original merchant interval remains host-wide after a shorter service
+  // is added or settings are edited. Read durable history, not an in-memory timer.
+  const longInterval = await admin.createProbeService({ ...serviceInput, hostIds: [7], health: { ...health, cooldownSeconds: 3600 } });
+  const host7 = (await db.getHostById(7))!;
+  let intervalCalls = 0;
+  const intervalDeps = { ...deps, request: async (_hook: any, context: any) => {
+    intervalCalls++; return { taskId: context.incidentId, outcome: "accepted" as const, reason: "ok" as const };
+  }};
+  for (const offset of [0, 15, 30]) await observeProbeHealth(host7, [{ ...report, serviceId: longInterval.id }], base + offset, intervalDeps);
+  const shortInterval = await admin.createProbeService({ ...serviceInput, hostIds: [7] });
+  for (const offset of [400, 415, 430]) await observeProbeHealth(host7, [{ ...report, serviceId: shortInterval.id }], base + offset, intervalDeps);
+  assert.equal(intervalCalls, 1);
+  assert.equal((await getProbeHealthViews([shortInterval.id])).get(shortInterval.id).nextSwitchAt, base + 3630);
+  await admin.updateProbeService({ ...serviceInput, id: shortInterval.id, hostIds: [7], health: { ...health, hook: undefined } });
+  for (const offset of [500, 515, 530]) await observeProbeHealth(host7, [{ ...report, serviceId: shortInterval.id }], base + offset, intervalDeps);
+  assert.equal(intervalCalls, 1);
+  for (const offset of [3600, 3615, 3630]) await observeProbeHealth(host7, [{ ...report, serviceId: shortInterval.id }], base + offset, intervalDeps);
+  assert.equal(intervalCalls, 2);
+
+  // Persist only fixed, safe diagnostic fields, never raw provider responses.
+  const rejected = await admin.createProbeService({ ...serviceInput, hostIds: [8] });
+  const host8 = (await db.getHostById(8))!;
+  for (const offset of [0, 15, 30]) await observeProbeHealth(host8, [{ ...report, serviceId: rejected.id }], base + offset, { ...deps,
+    request: async (_hook, context) => ({ taskId: context.incidentId, outcome: "uncertain", reason: "http_status", httpStatus: 429 }),
+  });
+  const rejectedView = (await getProbeHealthViews([rejected.id])).get(rejected.id);
+  assert.equal(rejectedView.lastAction.status, "uncertain"); assert.equal(rejectedView.lastAction.reason, "http_status");
+  assert.equal(rejectedView.lastAction.httpStatus, 429); assert.ok(rejectedView.blockedAction);
+
+  // Invalid saved ciphertext fails before dispatch, not as an ambiguous paid call.
+  const corrupt = await admin.createProbeService({ ...serviceInput, hostIds: [9] });
+  await runtime.executeRaw("UPDATE host_probe_health SET hookCiphertext = ? WHERE serviceId = ?", ["invalid-saved-ciphertext", corrupt.id]);
+  await assert.rejects(admin.probeServiceIpSwitchHook({ serviceId: corrupt.id }), (error: any) => {
+    assert.equal(error.message, "无法读取已保存的换 IP 参数，请重新配置接口");
+    assert.doesNotMatch(error.message, /ciphertext|decrypt|private-provider-secret/);
+    return true;
+  });
+  const host9 = (await db.getHostById(9))!;
+  let corruptCalls = 0;
+  for (const offset of [0, 15, 30]) await observeProbeHealth(host9, [{ ...report, serviceId: corrupt.id }], base + offset, {
+    ...deps, request: async () => { corruptCalls++; throw new Error("must not dispatch"); },
+  });
+  const corruptView = (await getProbeHealthViews([corrupt.id])).get(corrupt.id);
+  assert.equal(corruptCalls, 0);
+  assert.equal(corruptView.lastAction.status, "not_executed");
+  assert.equal(corruptView.lastAction.reason, "invalid_request");
+  assert.equal(corruptView.state.actionAttempted, false);
+  assert.equal(corruptView.blockedAction, null);
+
   // Real encrypted HTTP result routes, and disabling a service while a task is queued.
   const app = express(); app.use(express.json()); app.use("/api/agent", agentEncryptionMiddleware);
   registerAgentReportRoutes(app);
@@ -209,6 +306,47 @@ try {
     assert.equal(response.status, 200);
     return decryptPayload(await response.json(), token);
   };
+  // Regression through the real TCPing route/auth cache, not a fabricated full host.
+  for (const hostId of [11, 12]) {
+    const httpService = await admin.createProbeService({ ...serviceInput, hostIds: [hostId], health: { ...health, hook: { ...hook, url: hook.url + "&ip={{ip}}" } } });
+    const now = Math.floor(Date.now() / 1000);
+    await runtime.executeRaw("UPDATE host_probe_health SET state = ? WHERE serviceId = ?", [JSON.stringify({ phase: "unhealthy", failures: 3, successes: 0, failureSince: now - 60, lastSeen: now - 15, incidentId: randomUUID(), actionAttempted: false }), httpService.id]);
+    recordIpSwitchAgentCapability(hostId, true);
+    await agentPost(hostId, "/api/agent/tcping", { force: true, services: [{ ...report, serviceId: httpService.id, isTimeout: true, latencyMs: 0 }] });
+    const expires = Date.now() + 3000;
+    while (!hasQueuedIpSwitchAgentTasks(hostId) && Date.now() < expires) await new Promise(resolve => setTimeout(resolve, 5));
+    const [httpTask] = takeIpSwitchAgentTasks(hostId);
+    assert.ok(httpTask, "a compact authenticated identity must trigger an automatic task");
+    assert.equal(new URL(httpTask.request.url).searchParams.get("ip"), "8.8.8.8", "use the actual ingress address, not the default IP or an empty string");
+    if (hostId === 12) await db.updateHost(hostId, { entryIp: "8.8.4.4" });
+    assert.deepEqual(await agentPost(hostId, "/api/agent/ip-switch-claim", { taskId: httpTask.taskId }), { allowed: hostId === 11 });
+    await agentPost(hostId, "/api/agent/ip-switch-result", { result: { taskId: httpTask.taskId, outcome: "not_executed", reason: hostId === 11 ? "expired" : "claim_denied" } });
+    const finished = Date.now() + 3000;
+    while ((await getProbeHealthViews([httpService.id])).get(httpService.id).lastAction?.status === "pending" && Date.now() < finished) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal((await getProbeHealthViews([httpService.id])).get(httpService.id).lastAction.status, "not_executed");
+    recordIpSwitchAgentCapability(hostId, false);
+  }
+  // Keep the original stale-address guard, and expose why dispatch was skipped.
+  for (const hostId of [13, 14]) {
+    const guardedService = await admin.createProbeService({ ...serviceInput, hostIds: [hostId] });
+    const originalHost = (await db.getHostById(hostId))!;
+    if (hostId === 13) await db.updateHost(hostId, { entryIp: "8.8.4.4" });
+    let guardedCalls = 0, blockedNotices = 0;
+    const guardedDeps = { ready: () => true, notify: async () => { blockedNotices++; }, request: async (_hook: any, context: any) => {
+      guardedCalls++; assert.equal(context.ip, "8.8.4.4");
+      return { taskId: context.incidentId, outcome: "accepted" as const, reason: "ok" as const };
+    } };
+    const guardedReport = { ...report, serviceId: guardedService.id };
+    for (const offset of [0, 15, 30, 45]) await observeProbeHealth(originalHost, [guardedReport], base + offset, guardedDeps);
+    assert.equal(guardedCalls, 0);
+    assert.equal(blockedNotices, 2, "one unhealthy notice and one deduplicated waiting reason");
+    const guardView = (await getProbeHealthViews([guardedService.id])).get(guardedService.id);
+    assert.equal(guardView.state.actionBlockedReason, hostId === 13 ? "host_address_changed" : "host_address_unavailable");
+    assert.equal(guardView.lastAction, null);
+    if (hostId === 14) await db.updateHost(hostId, { entryIp: "8.8.4.4" });
+    await observeProbeHealth({ id: hostId, name: originalHost.name }, [guardedReport], base + 60, guardedDeps);
+    assert.equal(guardedCalls, 1);
+  }
   assert.equal((await fetch(url + "/api/agent/ip-switch-result", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 401);
   const fifth = await admin.createProbeService({ ...serviceInput, hostIds: [5] });
   const host5 = (await db.getHostById(5))!, report5 = { ...report, serviceId: fifth.id };
@@ -225,6 +363,53 @@ try {
   assert.deepEqual(await agentPost(5, "/api/agent/ip-switch-result", { result: { taskId: task.taskId, outcome: "not_executed", reason: "claim_denied" } }), { success: true });
   await waiting;
   assert.equal((await getProbeHealthViews([fifth.id])).get(fifth.id).lastAction.status, "not_executed");
+
+  // Real recipient selection/delivery: only enabled, bound administrators,
+  // never a legacy selected user, a non-admin creator, or the host's owner.
+  for (const row of [
+    { id: 21, username: "health-admin", role: "admin", accountEnabled: true, telegramId: "1021" },
+    { id: 22, username: "disabled-admin", role: "admin", accountEnabled: false, telegramId: "1022" },
+    { id: 23, username: "unbound-admin", role: "admin", accountEnabled: true },
+  ]) await runtime.insertAndGetId("users", { password: "fixture-only", ...row });
+  await runtime.executeRaw("UPDATE users SET telegramId = ? WHERE id = ?", ["1001", 1]);
+  await runtime.executeRaw("UPDATE users SET telegramId = ? WHERE id = ?", ["1002", 2]);
+  await runtime.insertAndGetId("hosts", { id: 10, name: "User-owned host", ip: "1.1.1.1", agentToken: "test-token-10", userId: 2 });
+  const { notify: _notify, ...notificationHealth } = health;
+  const notificationService = await admin.createProbeService({ ...serviceInput, hostIds: [10], health: { ...notificationHealth, autoSwitch: false, notifyUserId: 99999 } });
+  assert.equal((await getProbeHealthViews([notificationService.id])).get(notificationService.id).notify, true);
+  assert.equal((await getProbeHealthViews([notificationService.id])).get(notificationService.id).notifyUserId, null);
+  const [notificationRow] = await runtime.queryRaw<any>("SELECT config FROM host_probe_health WHERE serviceId = ?", [notificationService.id]);
+  assert.equal(JSON.parse(notificationRow.config).notifyUserId, null);
+  await runtime.executeRaw("UPDATE host_probe_services SET userId = ? WHERE id = ?", [2, notificationService.id]);
+  await runtime.executeRaw("UPDATE host_probe_health SET config = ? WHERE serviceId = ?", [JSON.stringify({ ...JSON.parse(notificationRow.config), notifyUserId: 2 }), notificationService.id]);
+  assert.equal((await getProbeHealthViews([notificationService.id])).get(notificationService.id).notifyUserId, null);
+  const originalSettings = await getAllSettings(), originalFetch = globalThis.fetch;
+  const sentTo: string[] = [];
+  let failFirstAdmin = false;
+  try {
+    await setSettings({ notificationChannel: "telegram", telegramBotEnabled: "true", telegramBotToken: "health-test-token" });
+    globalThis.fetch = (async (input, options) => {
+      assert.equal(String(input), "https://api.telegram.org/bothealth-test-token/sendMessage");
+      const body = JSON.parse(String(options?.body));
+      sentTo.push(String(body.chat_id));
+      assert.match(body.text, /国内健康检测/);
+      return Response.json(failFirstAdmin && String(body.chat_id) === "1001" ? { ok: false, description: "test delivery failure" } : { ok: true, result: { message_id: 1 } });
+    }) as typeof fetch;
+    const notificationHost = (await db.getHostById(10))!, notificationReport = { ...report, serviceId: notificationService.id };
+    for (const offset of [0, 15, 30]) await observeProbeHealth(notificationHost, [notificationReport], base + offset);
+    assert.deepEqual([...sentTo].sort(), ["1001", "1021"]);
+    sentTo.length = 0; failFirstAdmin = true;
+    for (const offset of [45, 60]) await observeProbeHealth(notificationHost, [{ ...notificationReport, probeSuccesses: 3 }], base + offset);
+    assert.deepEqual([...sentTo].sort(), ["1001", "1021"], "one administrator's delivery failure does not block others");
+    sentTo.length = 0;
+    await admin.updateProbeService({ ...serviceInput, id: notificationService.id, hostIds: [10], health: { ...notificationHealth, autoSwitch: false, notify: false } });
+    for (const offset of [75, 90, 105]) await observeProbeHealth(notificationHost, [notificationReport], base + offset);
+    assert.deepEqual(sentTo, [], "the notification switch still disables delivery");
+    assert.equal((await getProbeHealthViews([notificationService.id])).get(notificationService.id).state.phase, "unhealthy");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await setSettings(Object.fromEntries(["notificationChannel", "telegramBotEnabled", "telegramBotToken"].map(key => [key, originalSettings[key] ?? null])));
+  }
 } finally {
   if (http) { http.closeIdleConnections(); await new Promise<void>(resolve => http!.close(() => resolve())); }
   await runtime.closeDatabase();

@@ -52,7 +52,7 @@ const groupFields = {
 const planFields = {
   name: name.optional(), description: z.string().max(500).nullable().optional(), priceCents: z.number().int().min(0).max(100_000_000).optional().describe("cents; 100=1 CNY"),
   durationDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365), z.literal(730)]).optional(),
-  portCount: z.number().int().min(1).max(1024).optional(), trafficLimit: count.optional().describe("bytes; 0=unlimited"),
+  portCount: z.number().int().min(0).max(65535).optional().describe("0=unlimited; positive values reserve consecutive ports"), trafficLimit: count.optional().describe("bytes; 0=unlimited"),
   rateLimitMbps: z.number().int().min(0).max(1_000_000).optional(), maxRules: count.optional(), maxConnections: count.optional(), maxIPs: count.optional(),
   isActive: z.boolean().optional(), isStoreVisible: z.boolean().optional(), hostIds: ids.optional(), tunnelIds: ids.optional(), forwardGroupIds: ids.optional(),
 };
@@ -82,6 +82,7 @@ export const PANEL_SETTINGS: Record<string, Setting> = {
   emailExpiryReminder: setting("邮件到期提醒", "email.expiryReminder", "emailExpiryReminder"),
   emailTrafficReminder: setting("邮件流量提醒", "email.trafficReminder", "emailTrafficReminder"),
   emailTrafficReminderThreshold: setting("邮件剩余流量提醒阈值(%)", "email.trafficReminderThreshold", "emailTrafficReminderThreshold", 20, z.number().int().min(1).max(99)),
+  emailAdminCopy: setting("邮件提醒抄送管理员", "email.adminCopy", "emailAdminCopy"),
   telegramExpiryReminder: setting("TG到期提醒", "telegram.expiryReminder", "telegramExpiryReminder"),
   telegramTrafficReminder: setting("TG流量提醒", "telegram.trafficReminder", "telegramTrafficReminder"),
   telegramHostStatusNotify: setting("TG主机上下线通知", "telegram.hostStatusNotify", "telegramHostStatusNotify"),

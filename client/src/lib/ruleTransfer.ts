@@ -199,7 +199,7 @@ const ruleTransferRuleSchema = z.object({
   udpOverTcpPort: z.number().int().min(0).max(65535).optional().default(0),
   failoverEnabled: z.boolean().optional().default(false),
   failoverStrategy: z.enum(["fallback", "round_robin", "random", "ip_hash"]).optional().default("fallback"),
-  failoverTargets: z.array(failoverTargetSchema).max(10).optional().default([]),
+  failoverTargets: z.array(failoverTargetSchema).optional().default([]),
   failoverSeconds: z.number().int().min(10).max(3600).optional().default(60),
   recoverSeconds: z.number().int().min(10).max(3600).optional().default(120),
   autoFailback: z.boolean().optional().default(true),

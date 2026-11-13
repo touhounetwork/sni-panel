@@ -1601,16 +1601,16 @@ const createRuleInputSchema = z.object({
   protocol: z.enum(["tcp", "udp", "both"]).default("both"),
   gostMode: z.enum(["direct", "reverse"]).default("direct"),
   gostRelayHost: z.string().max(128).nullable().optional(),
-  gostRelayPort: z.number().min(1).max(65535).nullable().optional(),
+  gostRelayPort: z.number().int().min(1).max(65535).nullable().optional(),
   tunnelId: z.number().nullable().optional(),
   forwardGroupId: z.number().nullable().optional(),
-  sourcePort: z.number().min(0).max(65535), // 0 = 随机分配
+  sourcePort: z.number().int().min(0).max(65535), // 0 = 随机分配
   sni: sniInputSchema,
   targetIp: z.string().min(1).max(253).refine(
     (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
     "请输入有效的 IP 地址或域名"
   ),
-  targetPort: z.number().min(1).max(65535),
+  targetPort: z.number().int().min(1).max(65535),
   isEnabled: z.boolean().optional().default(true),
   telegramErrorNotifyEnabled: z.boolean().optional().default(false),
   blockHttp: z.boolean().optional(),
@@ -2131,17 +2131,17 @@ export const crudRulesRouter = router({
       protocol: z.enum(["tcp", "udp", "both"]).optional(),
       gostMode: z.enum(["direct", "reverse"]).optional(),
       gostRelayHost: z.string().max(128).nullable().optional(),
-      gostRelayPort: z.number().min(1).max(65535).nullable().optional(),
+      gostRelayPort: z.number().int().min(1).max(65535).nullable().optional(),
       tunnelId: z.number().nullable().optional(),
-      tunnelExitPort: z.number().min(1).max(65535).nullable().optional(),
+      tunnelExitPort: z.number().int().min(1).max(65535).nullable().optional(),
       forwardGroupId: z.number().nullable().optional(),
-      sourcePort: z.number().min(0).max(65535).optional(),
+      sourcePort: z.number().int().min(0).max(65535).optional(),
       sni: sniInputSchema,
       targetIp: z.string().min(1).max(253).refine(
         (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
         "请输入有效的 IP 地址或域名"
       ).optional(),
-      targetPort: z.number().min(1).max(65535).optional(),
+      targetPort: z.number().int().min(1).max(65535).optional(),
       telegramErrorNotifyEnabled: z.boolean().optional(),
       blockHttp: z.boolean().optional(),
       blockSocks: z.boolean().optional(),
@@ -3422,14 +3422,27 @@ export const crudRulesRouter = router({
       await refreshUpdatedRulePortWarnings();
       for (const affectedTunnelId of affectedTunnelIdsForRefresh) {
         const affectedTunnel = await db.getTunnelById(affectedTunnelId);
-        if (affectedTunnel) await pushTunnelEndpointRefresh(affectedTunnel, "forward-rule-updated");
+        if (affectedTunnel) await pushTunnelEndpointRefresh(affectedTunnel, "forward-rule-updated", { urgent: true });
       }
       if (keyFieldChanged) {
+        // Refresh only after the rule and every exit mapping are persisted.
+        // An early SSE can make an Agent reconcile the old target and cache
+        // that plan. Include both topologies when moving between tunnels.
+        if (!failoverHotUpdate) {
+          const affectedTunnelIds = new Set<number>();
+          if (rule.tunnelId) affectedTunnelIds.add(Number(rule.tunnelId));
+          if (nextTunnelIdForRule) affectedTunnelIds.add(Number(nextTunnelIdForRule));
+          for (const affectedTunnelId of affectedTunnelIds) {
+            const affectedTunnel = await db.getTunnelById(affectedTunnelId);
+            await db.updateTunnel(affectedTunnelId, { isRunning: false } as any);
+            if (affectedTunnel) await pushTunnelEndpointRefresh(affectedTunnel, "forward-rule-updated", { urgent: true });
+          }
+        }
         if (hostChanged) {
-          pushAgentRefresh(oldHostIdForRule, "forward-rule-updated-old-host");
-          pushAgentRefresh(Number(nextHostIdForRule), "forward-rule-updated-new-host");
+          pushAgentRefresh(oldHostIdForRule, "forward-rule-updated-old-host", { urgent: true });
+          pushAgentRefresh(Number(nextHostIdForRule), "forward-rule-updated-new-host", { urgent: true });
         } else if (!nextTunnelIdForRule) {
-          pushAgentRefresh(Number(nextHostIdForRule), "forward-rule-updated");
+          pushAgentRefresh(Number(nextHostIdForRule), "forward-rule-updated", { urgent: true });
         } else if (failoverHotUpdate) {
           const tunnel = await db.getTunnelById(nextTunnelIdForRule);
           if (tunnel) await pushTunnelEndpointRefresh(tunnel, "forward-rule-failover-hot-update");

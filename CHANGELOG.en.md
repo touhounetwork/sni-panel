@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [3.10.0] - 2026-11-12
+## [3.10.0] - 2026-11-13
 
 ### Features and improvements
 
@@ -16,6 +16,24 @@
 - Host management adds a "Batch commands" tab (admins only): pick nodes (by group or all online nodes at once) and run one command as root with `/bin/sh`, with a 10–3600 second timeout and a confirmation first. Each node shows its status, exit code, duration and output (last 1MB kept), and the whole batch or a single node can be cancelled; each node runs one command at a time and queues the rest locally. Offline nodes, or nodes without a live event stream, are marked as not delivered and never run the command after reconnecting. The event stream carries only a task id; the Agent fetches the command over the encrypted channel with its own token, and retired installations cannot fetch it. Runs are kept for 30 days and a past command can be reused in one click; the configuration audit records the nodes, timeout and a digest of the command, never its text.
 - Remove count caps on link topology: members of entry groups, exit groups, forward chains and forward groups (previously 20), multi-hop tunnel hops (previously 10), extra exits for tunnel load balancing (previously 4), backup destinations on rules and forward groups (previously 10) and host group members (previously 500) are no longer limited; existing minimums still apply.
 - Fix an intermittent hang in concurrent batch saves: reads of system settings or the shared query cache inside a transaction no longer wait for the same read started outside it and queued behind that transaction.
+- Integrate upstream 2.3.293–2.3.300 web, server, Agent and FXP changes:
+  - Whole-link TCP/UDP speed tests for tunnels and forward chains (live speed, peak, loss and jitter, JSON export). Tests use temporary ports and do not cover the SNI splitter or PROXY header segment.
+  - Per-host Agent panel URL, used for heartbeats, the event stream, upgrade pushes and install commands.
+  - Entry and failover group DDNS supports A + AAAA, synchronising each family separately and cleaning up empty families. CNAME is no longer offered for new configurations; existing CNAME records keep working.
+  - China health checks and automatic IP switching confirm a switch from the address the Agent actually reports, then update entry addresses, forwarding and DDNS; record the reason, HTTP status and cooldown end; let administrators view and edit saved switch parameters; keep monitoring if the new address still fails; and notify administrators only. Group DNS still follows the local entry-health rules: an IP switch never qualifies an entry by itself.
+  - IP limits count concurrent online source IPs (TCP/UDP; counted after at least 5 seconds and 512 bytes of two-way traffic). Requires ipset, iptables and conntrack byte accounting.
+  - Site themes: import, preview and switch, with ZIP, TAR.GZ and RAR uploads; the six existing palettes remain as built-in themes.
+  - Plans can bill one-way or two-way traffic, and a port count of 0 means unlimited; unpaid orders can be deleted.
+  - Administrators can open a user's backend in a new window. While viewing as a user they cannot change account security settings, pay, top up, purchase, redeem, withdraw, or manage MCP/Agent tokens.
+  - Password recovery from the login page via a verified email or linked Telegram account; a separate Telegram login switch; the bot answers commands only in private chats and uses a dedicated IPv4-first connection pool.
+  - Reminder emails can be summarised for administrators, one rejected recipient no longer stops the rest, disabled accounts are skipped, reminder markers are cleaned up periodically, and emails use the site name.
+  - Developer notices and update checks run on administrator visits (reused for 30 minutes); notices are read from this repository.
+  - Database network guards (deadlines for connections, queries and leases; a single slow query no longer marks the whole site unavailable; PostgreSQL checks its catalog before altering tables), plus lazy dependency loading and idle release to lower memory use.
+  - Creating, editing and deleting Agent tokens, hosts and tunnels is administrator-only. Tokens not yet bound to a host must be issued by an enabled administrator; registered hosts stay connected. One-click installs generate the JWT secret only with `openssl` and write `.env` with mode 600.
+  - Rule cards show and copy IPv6 entries; batch management filters by entry host; multi-entry port forwarding self-tests every entry; random ports are no longer rejected for a missing forwarding tool; fractional ports that stopped Agent sync are fixed and repaired at startup; a database error during an install-script request no longer crashes the panel.
+  - UDP-only rule latency probes support IPv6 and multi-address domains; host and probe live rates no longer stay empty or slow; V2 tunnels can use domain exits; multi-exit flags are fixed; tunnel rule target changes apply immediately.
+  - The English interface adopts upstream's rewritten copy, and "入站/出站" is unified as "入向/出向" (inbound/outbound); mobile filters collapse and summary cards can be hidden.
+  - The Agent SSH menu shows the forwarding environment and installs individual components such as Realm.
 
 ### Version and upgrade notes
 
@@ -25,6 +43,10 @@
 - Upgrading clears PROXY settings left on SNI rules once (older splitters never used them), so no entry starts sending or expecting PROXY headers unexpectedly.
 - Online upgrades, install scripts, the Docker image and the release workflow now use `touhounetwork/sni-panel`.
 - systemd units for forwarding services (unified runtime, tunnel runtime, Nginx stream, realm, socat, their SNI entries and guarded backends) change from `LimitNOFILE=65535` to `LimitNOFILE=infinity`, which resolves to the kernel's `fs.nr_open`. Units are rewritten on the next sync; running services pick up the new limit the next time they restart (a config change or the Agent restarting them). OpenRC and SysV init are unchanged.
+- The forwarding runtime is now built from a pinned go-gost commit in this repository's release pipeline (`forwardx-runtime 3.2.6-forwardx.2`, with a failover patch) and ships with `RUNTIME_LICENSE.txt` and `RUNTIME_BUILD.txt`. Upgrading an Agent replaces the existing gost and may briefly interrupt running forwards; upgrade during a maintenance window. The CI and release Go toolchain baseline moves to 1.24.13 (required by the GOST source); the `go` directive in `go.mod` is unchanged.
+- Link speed tests, concurrent-IP limits, live rate and UDP probe improvements and per-host panel URLs require Agent `3.10.0`; upgrade Agents together. IP limits also need ipset on the node, which the install and upgrade scripts try to install.
+- New columns `hosts.agentPanelUrlEnabled`/`agentPanelUrl`, `host_ip_switch_attempts` `reason`/`httpStatus`/`cooldownUntil`/`oldIp`/`addressSnapshot`, `subscription_plans.trafficMode` and `payment_orders.adminDismissedAt` are added automatically at startup.
+- Ordinary users can no longer create, edit or delete tunnels, hosts or Agent tokens. Registered nodes are unaffected; an Agent is rejected when the account that owns its host is disabled.
 
 ## [3.9.0] - 2026-10-29
 

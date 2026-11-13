@@ -1,6 +1,8 @@
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "./trpc";
+import { activeThemeSummary, activateTheme } from "../repositories/themeRepository";
 import { updateMultiDeviceLoginSettingCache } from "./context";
 import { z } from "zod";
+import { ADMIN_VISIT_CHECK_INTERVAL_MS } from "../../shared/visitChecks";
 import { AUTH_CAPTCHA_PROVIDERS, normalizeAuthCaptchaProvider } from "../../shared/authCaptcha";
 import * as db from "../db";
 import { ENV } from "../env";
@@ -24,13 +26,14 @@ import {
   summarizeMigrationSnapshot,
   startPanelMigration as beginPanelMigration,
 } from "../migration";
-import { sendMail } from "../email";
+import { parseAdminCopyRecipients, sendMail } from "../email";
 import { SMTP_SECURITY_MODES, effectiveSmtpSecurityMode, resolveSmtpSecurityMode } from "../smtpTransport";
 import { refreshTelegramBotProfile, resetTelegramBotPolling, startTelegramBot } from "../telegramBot";
 import { refreshDiscordBotProfile, resetDiscordBot, startDiscordBot, discordConnectionStatus } from "../discordBot";
 import { notificationChannel, publicNotificationSettings } from "../notificationSettings";
 import { validateDiscordBotToken } from "../discordCredentials";
 import { pushAgentRefresh, pushAgentSupportBundle, pushAgentUpgrade, requestHostTcping } from "../agentEvents";
+import { resolveAgentAdvertisedPanelUrl } from "../agentPanelUrl";
 import { createSupportBundleTask, failSupportBundleHost, getSupportBundleTask } from "../supportBundle";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { AGENT_ASSET_NAMES } from "../agentAssets";
@@ -1086,7 +1089,7 @@ async function getLatestUpdateInfoCached(force = false): Promise<UpdateInfo> {
   }
   if (!force && lastUpdateInfo) {
     const checkedAt = new Date(lastUpdateInfo.checkedAt).getTime();
-    if (Number.isFinite(checkedAt) && Date.now() - checkedAt < UPDATE_CHECK_COOLDOWN_MS) {
+    if (Number.isFinite(checkedAt) && Date.now() - checkedAt < ADMIN_VISIT_CHECK_INTERVAL_MS) {
       return lastUpdateInfo;
     }
   }
@@ -1625,6 +1628,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     siteTitle: all.siteTitle || "ForwardX",
     siteLogoDataUrl: all.siteLogoDataUrl || "",
     personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
+    activeTheme: activeThemeSummary(all),
     personalizationBackground: publicPersonalizationBackground(all),
     panelPublicUrl: all.panelPublicUrl ?? "",
     panelSsl: {
@@ -1688,6 +1692,8 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       expiryReminder: false,
       trafficReminder: false,
       trafficReminderThreshold: 20,
+      adminCopy: false,
+      adminCopyTo: "",
     },
     ddns: {
       enabled: false,
@@ -1729,6 +1735,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     },
     telegram: {
       enabled: false,
+      loginEnabled: all.telegramLoginEnabled !== "false",
       configured: false,
       botUsername: "",
       tokenMasked: "",
@@ -1767,6 +1774,7 @@ export const systemRouter = router({
     return db.getAllSettings().then((all) => ({
       repoUrl: REPO_URL,
       telegramBotUrl: TELEGRAM_BOT_URL,
+      telegramLoginEnabled: all.telegramLoginEnabled !== "false",
       version: APP_VERSION,
       androidAppVersion: ANDROID_APP_VERSION,
       androidApkDownloadUrl: ANDROID_APK_DOWNLOAD_URL,
@@ -1774,6 +1782,7 @@ export const systemRouter = router({
       siteTitle: all.siteTitle || "ForwardX",
       siteLogoDataUrl: all.siteLogoDataUrl || "",
       personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
+      activeTheme: activeThemeSummary(all),
       personalizationBackground: publicPersonalizationBackground(all),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
@@ -1870,6 +1879,8 @@ export const systemRouter = router({
         expiryReminder: all.emailExpiryReminder === "true",
         trafficReminder: all.emailTrafficReminder === "true",
         trafficReminderThreshold: Number(all.emailTrafficReminderThreshold || 20),
+        adminCopy: all.emailAdminCopy === "true",
+        adminCopyTo: all.emailAdminCopyTo ?? "",
       },
       ddns: {
         enabled: all.ddnsEnabled === "true",
@@ -1911,6 +1922,7 @@ export const systemRouter = router({
       },
       telegram: {
         enabled: all.telegramBotEnabled === "true" || (!!ENV.telegramBotToken.trim() && all.telegramBotEnabled !== "false"),
+        loginEnabled: all.telegramLoginEnabled !== "false",
         configured: !!(ENV.telegramBotToken.trim() || String(all.telegramBotToken || "").trim()),
         botUsername: all.telegramBotUsername ?? "",
         tokenMasked: (() => {
@@ -2087,9 +2099,12 @@ export const systemRouter = router({
           expiryReminder: z.boolean().optional(),
           trafficReminder: z.boolean().optional(),
           trafficReminderThreshold: z.number().int().min(1).max(99).optional(),
+          adminCopy: z.boolean().optional(),
+          adminCopyTo: z.string().max(1000).optional(),
         }).optional(),
         telegram: z.object({
           enabled: z.boolean().optional(),
+          loginEnabled: z.boolean().optional(),
           botToken: z.string().max(256).optional(),
           clearToken: z.boolean().optional(),
           expiryReminder: z.boolean().optional(),
@@ -2178,7 +2193,7 @@ export const systemRouter = router({
       }
       if (input.personalizationTheme !== undefined) {
         const theme = normalizePersonalizationThemePresetId(input.personalizationTheme);
-        await db.setSetting("personalizationTheme", theme);
+        await activateTheme(theme);
         console.info(`[Settings] personalization theme updated theme=${theme}`);
       }
       if (input.registrationEnabled !== undefined) {
@@ -2332,6 +2347,12 @@ export const systemRouter = router({
         if (email.expiryReminder !== undefined) next.emailExpiryReminder = email.expiryReminder ? "true" : "false";
         if (email.trafficReminder !== undefined) next.emailTrafficReminder = email.trafficReminder ? "true" : "false";
         if (email.trafficReminderThreshold !== undefined) next.emailTrafficReminderThreshold = String(email.trafficReminderThreshold);
+        if (email.adminCopy !== undefined) next.emailAdminCopy = email.adminCopy ? "true" : "false";
+        if (email.adminCopyTo !== undefined) {
+          const recipients = parseAdminCopyRecipients(email.adminCopyTo);
+          if (recipients.invalid.length) throw new Error(`抄送邮箱格式不正确：${recipients.invalid[0]}`);
+          next.emailAdminCopyTo = recipients.valid.join(", ") || null;
+        }
         await db.setSettings(next);
         console.info("[Settings] email settings updated");
       }
@@ -2354,6 +2375,7 @@ export const systemRouter = router({
           throw new Error("请先配置并启用 Telegram 机器人");
         }
         if (input.telegram.enabled !== undefined) next.telegramBotEnabled = input.telegram.enabled ? "true" : "false";
+        if (input.telegram.loginEnabled !== undefined) next.telegramLoginEnabled = input.telegram.loginEnabled ? "true" : "false";
         if (input.telegram.expiryReminder !== undefined) next.telegramExpiryReminder = input.telegram.expiryReminder && nextEnabled && !!effectiveToken ? "true" : "false";
         if (input.telegram.trafficReminder !== undefined) next.telegramTrafficReminder = input.telegram.trafficReminder && nextEnabled && !!effectiveToken ? "true" : "false";
         if (input.telegram.trafficReminderThreshold !== undefined) next.telegramTrafficReminderThreshold = String(input.telegram.trafficReminderThreshold);
@@ -2966,8 +2988,6 @@ export const systemRouter = router({
       if (!target) throw new Error("目标 Agent 版本不在最近 5 个可回退版本内");
       await assertAgentReleaseAssetsReadyForRollback(target.panelVersion, target.agentVersion);
       const hosts = await db.getHosts();
-      const configuredPanelUrl = (await db.getSetting("panelPublicUrl")) || "";
-      const panelUrl = /^https?:\/\//.test(configuredPanelUrl) ? configuredPanelUrl.replace(/\/+$/, "") : "";
       let requested = 0;
       let pushed = 0;
       let skippedSame = 0;
@@ -2981,7 +3001,7 @@ export const systemRouter = router({
         }
         await db.requestHostAgentUpgrade(hostId, target.agentVersion, target.panelVersion);
         requested += 1;
-        if (pushAgentUpgrade(hostId, target.agentVersion, panelUrl, target.panelVersion)) pushed += 1;
+        if (pushAgentUpgrade(hostId, target.agentVersion, await resolveAgentAdvertisedPanelUrl(host), target.panelVersion)) pushed += 1;
       }
       console.info(`[AgentRollback] targetAgent=v${target.agentVersion} release=v${target.panelVersion} requested=${requested} pushed=${pushed} skippedSame=${skippedSame}`);
       return {

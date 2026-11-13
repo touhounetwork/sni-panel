@@ -5,6 +5,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import AnimatedStatValue, { StatValuePersistenceContext } from "@/components/AnimatedStatValue";
 import { useMotionEnabled } from "@/components/MotionPolicy";
 import DashboardLayout from "@/components/DashboardLayout";
+import { MetricReadout } from "@/components/MetricReadout";
 import PanelStartView from "@/components/PanelStartView";
 import MobileAppSettings from "@/components/MobileAppSettings";
 import { Badge } from "@/components/ui/badge";
@@ -115,7 +116,7 @@ export function DashboardStatCard({
   fallbackValue,
   className,
   index = 0,
-  tone = "bg-gradient-to-br from-teal-500 to-teal-600",
+  direction,
 }: {
   title: string;
   value: string | number;
@@ -126,41 +127,33 @@ export function DashboardStatCard({
   fallbackValue?: string | number;
   className?: string;
   index?: number;
-  tone?: string;
+  direction?: "inbound" | "outbound";
 }) {
   return (
     <div
       className={cn("min-w-0", className)}
     >
-      <Card enterIndex={index} interactive hoverable className="pearl-stat group h-full border-border/40">
-        <div aria-hidden="true" className={`pointer-events-none absolute inset-0 opacity-[0.04] dark:opacity-[0.07] ${tone}`} />
-        <CardContent className="relative p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-1">
-              <p className="break-words text-xs font-medium text-muted-foreground">{title}</p>
+      <Card enterIndex={index} interactive hoverable disableEnterAnimation className="pearl-stat h-full border-border/60">
+        <CardContent className="p-4">
+          <MetricReadout title={title} icon={Icon} direction={direction} value={
               <AnimatedStatValue
                 as="p"
                 value={value}
                 loading={loading}
                 cacheKey={cacheKey}
                 fallbackValue={fallbackValue}
-                className="break-words text-2xl font-bold leading-tight tracking-tight tabular-nums"
+                className="[overflow-wrap:anywhere]"
               />
-              {subtitle && (
+          } hint={subtitle && (
                 <AnimatedStatValue
                   as="p"
                   value={subtitle}
                   loading={loading}
                   cacheKey={`${cacheKey}.subtitle`}
                   fallbackValue=""
-                  className="break-words text-xs text-muted-foreground/80"
+                  className="break-words"
                 />
-              )}
-            </div>
-            <div aria-hidden="true" className={`pearl-stat-icon hidden h-10 w-10 shrink-0 items-center justify-center rounded-full shadow-sm sm:flex ${tone}`}>
-              <Icon className="h-5 w-5 text-white" />
-            </div>
-          </div>
+          )} />
         </CardContent>
       </Card>
     </div>
@@ -188,7 +181,7 @@ function CircularProgress({ value, color }: { value: number; color: string }) {
           strokeDasharray={circumference}
           strokeDashoffset={offset}
           strokeLinecap="round"
-          className="transition-all duration-700 ease-out"
+          className="transition-[stroke-dashoffset] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:transition-none"
         />
       </svg>
       <span className="absolute text-sm font-bold tabular-nums">{Math.round(value)}%</span>
@@ -200,7 +193,7 @@ function FixedColorProgress({ value, color, className = "" }: { value: number; c
   const normalized = Math.max(0, Math.min(100, Number(value) || 0));
   return (
     <div className={`relative h-4 w-full overflow-hidden rounded-full bg-secondary ${className}`}>
-      <div className="h-full rounded-full transition-all" style={{ width: `${normalized}%`, backgroundColor: color }} />
+      <div className="h-full w-full origin-left rounded-full transition-transform duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:transition-none" style={{ transform: `scaleX(${normalized / 100})`, backgroundColor: color }} />
     </div>
   );
 }
@@ -214,13 +207,13 @@ function TrafficTooltipContent({ active, payload, label }: any) {
       <p className="mb-1.5 text-xs text-muted-foreground">{data.fullLabel || label}</p>
       <div className="space-y-1">
         <p className="flex items-center gap-1.5 text-xs tabular-nums">
-          <span className="h-2 w-2 rounded-full bg-chart-1" />
-          <span className="text-muted-foreground">{translateText("入站")}</span>
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "var(--traffic-in)" }} />
+          <span className="text-muted-foreground">{translateText("入向")}</span>
           <span className="ml-auto font-semibold">{formatBytes(data.bytesIn)}</span>
         </p>
         <p className="flex items-center gap-1.5 text-xs tabular-nums">
-          <span className="h-2 w-2 rounded-full bg-chart-2" />
-          <span className="text-muted-foreground">{translateText("出站")}</span>
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "var(--traffic-out)" }} />
+          <span className="text-muted-foreground">{translateText("出向")}</span>
           <span className="ml-auto font-semibold">{formatBytes(data.bytesOut)}</span>
         </p>
       </div>
@@ -325,7 +318,7 @@ function TrafficPieSection({
             <BarChart3 className="h-4 w-4" />
             {title}
           </h3>
-          <span className="text-[10px] text-muted-foreground/70">{translateText("近 24H")}</span>
+          <span className="text-[11px] text-muted-foreground/70">{translateText("近 24H")}</span>
         </div>
         {loading && chartData.length === 0 ? (
           <TrafficPieLoadingState />
@@ -365,7 +358,7 @@ function TrafficPieSection({
                   <text x="50%" y="46%" textAnchor="middle" dominantBaseline="central" className="fill-foreground text-sm font-semibold tabular-nums">
                     {formatBytes(total)}
                   </text>
-                  <text x="50%" y="59%" textAnchor="middle" dominantBaseline="central" className="fill-muted-foreground text-[10px]">{translateText("合计")}</text>
+                  <text x="50%" y="59%" textAnchor="middle" dominantBaseline="central" className="fill-muted-foreground text-[11px]">{translateText("合计")}</text>
                   <RTooltip content={<PieTooltipContent />} wrapperStyle={{ pointerEvents: "none" }} />
                 </PieChart>
               </ResponsiveContainer>
@@ -487,7 +480,7 @@ export function DashboardStatusOverview({ isAdmin, loading, onlineHosts, totalHo
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm text-muted-foreground">{translateText("用户角色")}</span>
-              <Badge variant="secondary" className="px-2 py-0.5 text-[10px]">
+              <Badge variant="secondary" className="px-2 py-0.5 text-[11px]">
                 {isAdmin ? <><Shield className="mr-1 h-3 w-3" />{translateText("管理员")}</> : translateText("普通用户")}
               </Badge>
             </div>
@@ -616,8 +609,7 @@ function DashboardContent() {
     <div className="space-y-6">
       <div className="pearl-page-header">
         <div>
-          <h1 className="text-xl font-bold tracking-tight sm:text-2xl">{translateText("仪表盘")}</h1>
-          <p className="mt-1 text-xs text-muted-foreground sm:text-sm">{translateText("欢迎回来，")}{user?.name || user?.username || translateText("用户")}</p>
+          <h1 className="text-xl font-semibold sm:text-2xl">{translateText("仪表盘")}</h1>
           <p className="mt-1 text-xs text-muted-foreground" title={stats?.summaryUpdatedAt ? translateText("上次更新：{0}", [new Date(stats.summaryUpdatedAt).toLocaleString(getFormatLocale())]) : undefined}>{translateText("统计约每分钟更新，余额与额度实时校验")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -643,7 +635,6 @@ function DashboardContent() {
         )}
         <DashboardStatCard
           title={translateText("转发规则")}
-          tone="bg-gradient-to-br from-blue-500 to-blue-600"
           value={stats?.totalRules ?? 0}
           subtitle={translateText("{0} 条已启用", [stats?.activeRules ?? 0])}
           icon={ArrowRightLeft}
@@ -654,10 +645,10 @@ function DashboardContent() {
           index={isAdmin ? 1 : 0}
         />
         <DashboardStatCard
-          title={translateText("入站流量")}
-          tone="bg-gradient-to-br from-emerald-500 to-emerald-600"
+          title={translateText("入向流量")}
+          direction="inbound"
           value={formatBytes(trafficTotals?.totalTrafficIn ?? 0)}
-          subtitle={translateText("累计入站")}
+          subtitle={translateText("累计入向")}
           icon={ArrowDownToLine}
           loading={trafficTotalsLoading || !trafficTotals}
           cacheKey="home.stats.totalTrafficIn"
@@ -665,10 +656,10 @@ function DashboardContent() {
           index={isAdmin ? 2 : 1}
         />
         <DashboardStatCard
-          title={translateText("出站流量")}
-          tone="bg-gradient-to-br from-orange-500 to-orange-600"
+          title={translateText("出向流量")}
+          direction="outbound"
           value={formatBytes(trafficTotals?.totalTrafficOut ?? 0)}
-          subtitle={translateText("累计出站")}
+          subtitle={translateText("累计出向")}
           icon={ArrowUpFromLine}
           loading={trafficTotalsLoading || !trafficTotals}
           cacheKey="home.stats.totalTrafficOut"
@@ -907,16 +898,16 @@ function DashboardContent() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <BarChart3 className="h-4 w-4" />{translateText("近 24H 流量展示")}<span className="text-[10px] font-normal text-muted-foreground/60">{translateText("每小时汇总")}</span>
+              <BarChart3 className="h-4 w-4" />{translateText("近 24H 流量展示")}<span className="text-xs font-normal text-muted-foreground/80">{translateText("每小时汇总")}</span>
             </CardTitle>
-            <div className="flex items-center gap-3 text-[10px]">
-              <span className="flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full bg-chart-1" />{translateText("入站")}</span>
-              <span className="flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full bg-chart-2" />{translateText("出站")}</span>
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <span className="h-0.5 w-4 rounded-full" style={{ backgroundColor: "var(--traffic-in)" }} />{translateText("入向")}</span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-0 w-4 border-t-2 border-dashed" style={{ borderColor: "var(--traffic-out)" }} />{translateText("出向")}</span>
             </div>
           </div>
-          <p className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground/60">
+          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground/80">
             <Info className="h-3 w-3" />{translateText("每小时汇总一次可见规则流量。")}</p>
         </CardHeader>
         <CardContent>
@@ -930,26 +921,27 @@ function DashboardContent() {
                 <AreaChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="trafficInGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--chart-1)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--chart-1)" stopOpacity={0.02} />
+                      <stop offset="5%" stopColor="var(--traffic-in)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--traffic-in)" stopOpacity={0.02} />
                     </linearGradient>
                     <linearGradient id="trafficOutGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--chart-2)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--chart-2)" stopOpacity={0.02} />
+                      <stop offset="5%" stopColor="var(--traffic-out)" stopOpacity={0.18} />
+                      <stop offset="95%" stopColor="var(--traffic-out)" stopOpacity={0.01} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid vertical={false} strokeDasharray="3 5" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={{ fontSize: 9 }} minTickGap={60} interval="preserveStartEnd" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} minTickGap={60} interval="preserveStartEnd" />
                   <YAxis
-                    tick={{ fontSize: 9 }}
-                    tickFormatter={(value) => formatBytes(value)}
-                    width={56}
+                    tick={{ fontSize: 11 }}
+                    // A non-breaking space keeps "5.76 GB" on one line; Recharts wraps ticks at spaces.
+                    tickFormatter={(value) => formatBytes(value).replace(" ", "\u00A0")}
+                    width={68}
                     domain={[0, (dataMax: number) => Math.max(1024, Math.ceil((dataMax || 0) * 1.2))]}
                     allowDecimals={false}
                   />
                   <RTooltip content={<TrafficTooltipContent />} cursor={{ stroke: "var(--color-muted-foreground)", strokeDasharray: "3 3" }} />
-                  <Area isAnimationActive={motionEnabled} animationDuration={600} type="monotone" dataKey="bytesIn" name={translateText("入站")} stroke="var(--chart-1)" strokeWidth={2} fill="url(#trafficInGradient)" dot={false} />
-                  <Area isAnimationActive={motionEnabled} animationDuration={600} type="monotone" dataKey="bytesOut" name={translateText("出站")} stroke="var(--chart-2)" strokeWidth={2} fill="url(#trafficOutGradient)" dot={false} />
+                  <Area isAnimationActive={motionEnabled} animationDuration={600} type="monotone" dataKey="bytesIn" name={translateText("入向")} stroke="var(--traffic-in)" strokeWidth={2} fill="url(#trafficInGradient)" dot={false} />
+                  <Area isAnimationActive={motionEnabled} animationDuration={600} type="monotone" dataKey="bytesOut" name={translateText("出向")} stroke="var(--traffic-out)" strokeWidth={2} strokeDasharray="6 4" fill="url(#trafficOutGradient)" dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             )}

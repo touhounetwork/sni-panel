@@ -20,7 +20,7 @@ function formatLatency(value: number | null) {
 function StatCard({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="pearl-hover-card latency-stat-card min-w-0 rounded-md border border-border/50 bg-muted/20 px-2 py-1.5 sm:rounded-lg sm:px-3 sm:py-2">
-      <p title={label} className="break-words text-[10px] leading-snug text-muted-foreground sm:text-[11px]">{label}</p>
+      <p title={label} className="break-words text-[11px] leading-snug text-muted-foreground sm:text-[11px]">{label}</p>
       <div className="mt-0.5 min-w-0 sm:mt-1">{children}</div>
     </div>
   );
@@ -57,7 +57,7 @@ export function LatencyStabilityStats({
           <p className="break-words text-xs font-semibold tabular-nums sm:text-sm">
             {stats.score === null ? "--" : `${stats.score}/100`}
           </p>
-          <p className={`break-words text-[10px] font-medium sm:text-[11px] ${stats.rating.className}`}>
+          <p className={`break-words text-[11px] font-medium sm:text-[11px] ${stats.rating.className}`}>
             {stats.rating.label}
           </p>
         </StatCard>
@@ -74,8 +74,8 @@ export function LatencyStabilityStats({
             : translateText("稳定性延迟样本覆盖所选时间内已上报的有效批次。")}</>}
         </p>
         <HelpDetails title={translateText("统计口径")}>
-          {!counterStatistics?.available && <p>{translateText("暂无累计探测统计，请升级 Agent 并等待上报。旧记录省略了稳定成功探测，无法准确计算失败率与稳定性。")}</p>}
-          <p>{description || translateText("仅包含支持累计计数的 Agent 自首次上报后可观察到的探测；不补算旧数据，时间边界受上报间隔影响。")}</p>
+          {!counterStatistics?.available && <p>{translateText("旧版 Agent 的记录不含成功探测的次数，无法计算失败率和稳定性。")}</p>}
+          <p>{description || translateText("只统计 Agent 升级后上报的探测，之前的数据不补算；起止时间可能有一个上报间隔的误差。")}</p>
         </HelpDetails>
         </>
       )}

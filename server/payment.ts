@@ -16,9 +16,11 @@ import {
   createGmPayOrder,
   getGmPayGatewayInfo,
   GM_PAY_NETWORKS,
+  GM_PAY_SIGNATURE_ALGORITHMS,
   normalizeGmPayBase,
   verifyGmPaySignature,
   type GmPayNetwork,
+  type GmPaySignatureAlgorithm,
 } from "./gmPay";
 import {
   appendWxpayH5Redirect,
@@ -61,6 +63,7 @@ type GmPayConfig = {
   pid: string;
   secretKey: string;
   network: GmPayNetwork;
+  signatureAlgorithm: GmPaySignatureAlgorithm;
 };
 
 type AlipayConfig = {
@@ -158,6 +161,7 @@ const defaultPaymentConfig: PaymentConfig = {
     pid: "",
     secretKey: "",
     network: "tron",
+    signatureAlgorithm: "md5",
   },
 };
 
@@ -215,6 +219,7 @@ const paymentConfigInput = z.object({
     pid: z.string().trim().max(128),
     secretKey: z.string().max(256).optional(),
     network: z.enum(GM_PAY_NETWORKS),
+    signatureAlgorithm: z.enum(GM_PAY_SIGNATURE_ALGORITHMS).optional(),
   }).optional(),
 });
 
@@ -875,7 +880,7 @@ async function finalizePaidOrder(outTradeNo: string) {
         await db.recoverUserForwardAccessIfEligible(order.userId);
         await db.updatePaymentOrder(outTradeNo, { subscriptionId: result.subscriptionId, status: "completed", failureReason: null } as any);
         await accrueAffiliateCommission(outTradeNo);
-        appendPanelLog("info", `[Plan] subscription ${order.subscriptionId ? "renewed" : "granted"} user=${order.userId} plan=${order.planId} order=${outTradeNo} subscription=${result.subscriptionId} ports=${result.portRangeStart}-${result.portRangeEnd}`);
+        appendPanelLog("info", `[Plan] subscription ${order.subscriptionId ? "renewed" : "granted"} user=${order.userId} plan=${order.planId} order=${outTradeNo} subscription=${result.subscriptionId} ports=${result.portRangeStart && result.portRangeEnd ? `${result.portRangeStart}-${result.portRangeEnd}` : "unlimited"}`);
         return;
       }
       if ((order as any).orderType === "balance") {
@@ -1097,6 +1102,7 @@ export const paymentRouter = router({
         },
         gmpay: input.gmpay ? {
           ...input.gmpay,
+          signatureAlgorithm: input.gmpay.signatureAlgorithm ?? previous.gmpay.signatureAlgorithm,
           apiBase: normalizeGmPayBase(input.gmpay.apiBase),
           secretKey: input.gmpay.secretKey?.trim() || previous.gmpay.secretKey,
         } : previous.gmpay,
@@ -1396,8 +1402,8 @@ async function handleGmPayNotification(req: express.Request, res: express.Respon
     const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
     const params = JSON.parse(raw || "{}") as Record<string, string | number | null | undefined>;
     if (!config.gmpay.secretKey) throw new Error("GM Pay is not configured");
-    if (!verifyGmPaySignature(params, config.gmpay.secretKey)) {
-      appendPanelLog("warn", "[Payment] GM Pay notify signature failed");
+    if (!verifyGmPaySignature(params, config.gmpay.secretKey, config.gmpay.signatureAlgorithm)) {
+      appendPanelLog("warn", `[Payment] GM Pay notify signature failed algorithm=${config.gmpay.signatureAlgorithm}; check gateway version and merchant key`);
       res.status(400).send("fail");
       return;
     }

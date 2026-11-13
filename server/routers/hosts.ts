@@ -8,6 +8,7 @@ import * as db from "../db";
 import { cancelHostCommand, countHostCommandBatches, getHostCommandBatch, listHostCommandBatches, runHostCommandBatch } from "../hostCommands";
 import { HOST_COMMAND_MAX_COMMAND_BYTES, HOST_COMMAND_MAX_TIMEOUT_SECONDS, HOST_COMMAND_MIN_TIMEOUT_SECONDS } from "../../shared/hostCommands";
 import { getGlobalInstallHookCommand, getHostInstallHook, INSTALL_HOOK_MAX_COMMAND_BYTES, INSTALL_HOOK_MODES, saveGlobalInstallHookCommand, saveHostInstallHook } from "../hostInstallHooks";
+import { hostNetworkSpeed, hostNetworkSampleAgeMs } from "../../shared/hostNetworkSpeed";
 import { notificationSettings } from "../notificationSettings";
 import { appendPanelLog } from "../_core/panelLogger";
 import { markHostMetricsWatching, pushAgentRefresh, pushAgentUpgrade } from "../agentEvents";
@@ -31,7 +32,7 @@ import { billingCalendarParts } from "@shared/billingTime";
 import { normalizeAgentProbeCounts } from "@shared/agentDtos";
 import { deleteHostWithImpact, getHostDeletionImpact, prepareHostDeletion } from "../hostDeletion";
 import { hostChinaHealthSchema } from "../../shared/hostChinaHealth";
-import { getProbeHealthViews, saveProbeHealth, acknowledgeIpSwitch, probeHealthLock } from "../hostProbeHealth";
+import { getProbeHealthViews, getProbeHealthHook, saveProbeHealth, acknowledgeIpSwitch, probeHealthLock } from "../hostProbeHealth";
 import { withDatabaseTransaction } from "../dbRuntime";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { normalizeHostIp, hostAddressOptions, normalizeHostDdnsIpVersion } from "../../shared/hostAddresses";
@@ -40,6 +41,23 @@ import { getMonitorSettings, saveMonitorSettings, getResourceAlertPolicy, saveRe
 import { operationsMonitorSchema, resourceAlertPolicySchema, resourceAlertServiceSchema } from "../../shared/operationsMonitor";
 import { normalizeHostProbeMethod, urlProbeOptionsSchema } from "../../shared/urlProbe";
 import { getAgentConnectionStats } from "../agentConnectionStats";
+import { resolveAgentAdvertisedPanelUrl } from "../agentPanelUrl";
+import { normalizeAgentPanelUrl } from "../../shared/agentPanelUrl";
+
+const agentPanelUrlFields = {
+  agentPanelUrlEnabled: z.boolean().optional(),
+  agentPanelUrl: z.string().trim().max(2048).nullable().optional().refine(
+    value => !value || !!normalizeAgentPanelUrl(value),
+    "Agent 面板连接地址须为有效 HTTP/HTTPS 地址，不含账号、查询参数或片段",
+  ),
+};
+
+function normalizeHostAgentPanelUrl(input: { agentPanelUrlEnabled?: boolean; agentPanelUrl?: string | null }, previous?: any) {
+  const agentPanelUrlEnabled = input.agentPanelUrlEnabled ?? !!previous?.agentPanelUrlEnabled;
+  const agentPanelUrl = normalizeAgentPanelUrl(input.agentPanelUrl !== undefined ? input.agentPanelUrl : previous?.agentPanelUrl) || null;
+  if (agentPanelUrlEnabled && !agentPanelUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "请填写 Agent 面板连接地址" });
+  return { agentPanelUrlEnabled, agentPanelUrl };
+}
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
 const GITHUB_API_LIMIT_STATUSES = new Set([403, 429]);
@@ -449,7 +467,8 @@ function compactHostStatus(host: any) {
   };
 }
 
-function compactHostMetricSummary(row: any) {
+function compactHostMetricSummary(row: any, isOnline = true) {
+  const speed = hostNetworkSpeed(row, undefined, { isOnline });
   return {
     hostId: Number(row?.hostId || 0),
     cpuUsage: row?.cpuUsage ?? null,
@@ -461,10 +480,11 @@ function compactHostMetricSummary(row: any) {
     swapUsage: row?.swapUsage ?? null,
     swapUsed: row?.swapUsed ?? null,
     swapTotal: row?.swapTotal ?? null,
-    networkSpeedIn: row?.networkSpeedIn == null ? null : Math.round(Number(row.networkSpeedIn) || 0),
+    networkSpeedIn: speed.in == null ? null : Math.round(speed.in),
     networkIn: row?.networkIn == null ? null : Math.max(0, Number(row.networkIn) || 0),
     networkOut: row?.networkOut == null ? null : Math.max(0, Number(row.networkOut) || 0),
-    networkSpeedOut: row?.networkSpeedOut == null ? null : Math.round(Number(row.networkSpeedOut) || 0),
+    networkSpeedOut: speed.out == null ? null : Math.round(speed.out),
+    networkSampleAgeMs: hostNetworkSampleAgeMs(row),
     diskUsage: row?.diskUsage ?? null,
     diskUsed: row?.diskUsed ?? null,
     diskTotal: row?.diskTotal ?? null,
@@ -691,7 +711,8 @@ export const hostsRouter = router({
           .map((group) => compactPublicMonitorGroup(group, visibleHostIds))
           .filter((group) => group.id > 0 && group.name && group.hostIds.length > 0)
           .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
-        const compactMetrics = (metricRows as any[]).map(compactHostMetricSummary).filter((row) => row.hostId > 0);
+        const onlineHostIds = new Set(hosts.filter((host) => host.isOnline).map((host) => host.id));
+        const compactMetrics = (metricRows as any[]).map((row) => compactHostMetricSummary(row, onlineHostIds.has(Number(row.hostId)))).filter((row) => row.hostId > 0);
         const compactTraffic = (trafficRows as any[]).map(compactHostTrafficSummary).filter((row) => row.hostId > 0);
         let currentTrafficIn = 0;
         let currentTrafficOut = 0;
@@ -715,8 +736,8 @@ export const hostsRouter = router({
           summary: {
             totalHosts: hosts.length,
             onlineHosts: hosts.filter((host) => !!host.isOnline).length,
-            currentTrafficIn,
-            currentTrafficOut,
+            currentTrafficIn: compactMetrics.some((row) => row.networkSpeedIn !== null) ? currentTrafficIn : null,
+            currentTrafficOut: compactMetrics.some((row) => row.networkSpeedOut !== null) ? currentTrafficOut : null,
             totalTrafficIn,
             totalTrafficOut,
           },
@@ -757,7 +778,7 @@ export const hostsRouter = router({
           path: configuredPath,
           refreshedAt: new Date().toISOString(),
           host,
-          metric: (metricRows as any[]).map(compactHostMetricSummary).find((row) => row.hostId === host.id) || null,
+          metric: (metricRows as any[]).map((row) => compactHostMetricSummary(row, host.isOnline)).find((row) => row.hostId === host.id) || null,
           traffic: (trafficRows as any[]).map(compactHostTrafficSummary).find((row) => row.hostId === host.id) || compactHostTrafficSummary({ hostId: host.id }),
           services: services.map((service) => compactPublicProbeService(service, latestByService.get(Number(service.id))))
             .filter((service) => service.id > 0 && service.name),
@@ -919,7 +940,7 @@ export const hostsRouter = router({
         });
         const hostIds = summaryScope.hostIds;
         const [metricSnapshots, trafficRows] = await Promise.all([
-          db.getLatestHostMetricSnapshots(hostIds),
+          db.getLatestHostMetricSnapshots(summaryScope.onlineHostIds),
           db.getHostTrafficSummary(hostIds),
         ]);
         const instantTraffic = db.summarizeHostInstantTraffic(metricSnapshots);
@@ -953,6 +974,14 @@ export const hostsRouter = router({
         health: health.get(Number(service.id)) || null,
       }));
     }),
+    // Mutation avoids retaining provider secrets in the browser's polling/query cache.
+    probeServiceIpSwitchHook: adminProcedure
+      .input(z.object({ serviceId: z.number().int().positive() }))
+      .mutation(async ({ input, ctx }) => {
+        ctx.res.setHeader?.("Cache-Control", "no-store");
+        if (!await db.getHostProbeServiceById(input.serviceId)) throw new TRPCError({ code: "NOT_FOUND", message: "服务不存在" });
+        return getProbeHealthHook(input.serviceId);
+      }),
     availabilityHistory: protectedProcedure
       .input(z.object({ hostId: z.number().int().positive(), ...latencyHistoryWindowInput }))
       .query(async ({ input, ctx }) => {
@@ -1083,8 +1112,9 @@ export const hostsRouter = router({
         }
         return ctx.user.role === "admin" ? host : compactHostForList(host);
       }),
-    create: protectedProcedure
+    create: adminProcedure
       .input(z.object({
+        ...agentPanelUrlFields,
         name: z.string().min(1).max(128),
         ip: hostAddressSchema,
         hostType: z.enum(["master", "slave"]).default("slave"),
@@ -1150,6 +1180,7 @@ export const hostsRouter = router({
           ...input,
           ...trafficConfig,
           ...ddnsConfig,
+          ...normalizeHostAgentPanelUrl(input),
           hostStatusNotifyEnabled: ctx.user.role === "admin" ? (input.hostStatusNotifyEnabled ?? true) : true,
           agentToken,
           networkInterface: input.networkInterface || null,
@@ -1180,8 +1211,9 @@ export const hostsRouter = router({
         }
         return { success: true };
       }),
-    update: protectedProcedure
+    update: adminProcedure
       .input(z.object({
+        ...agentPanelUrlFields,
         id: z.number(),
         name: z.string().min(1).max(128).optional(),
         ip: hostAddressSchema.optional(),
@@ -1240,6 +1272,13 @@ export const hostsRouter = router({
           ? normalizePortAllowlist(input.portAllowlist)
           : String((host as any).portAllowlist || "");
         const { id, ...data } = input;
+        const hasAgentPanelUrlInput = input.agentPanelUrl !== undefined || input.agentPanelUrlEnabled !== undefined;
+        const nextAgentPanelUrl = hasAgentPanelUrlInput ? normalizeHostAgentPanelUrl(input, host) : null;
+        const agentPanelUrlChanged = !!nextAgentPanelUrl && (
+          nextAgentPanelUrl.agentPanelUrlEnabled !== !!host.agentPanelUrlEnabled
+          || nextAgentPanelUrl.agentPanelUrl !== (host.agentPanelUrl || null)
+        );
+        if (nextAgentPanelUrl) Object.assign(data, nextAgentPanelUrl);
         const primarySelectionChanged = data.preferredIpv4 !== undefined || data.preferredIpv6 !== undefined;
         if (primarySelectionChanged) {
           for (const [field, family] of [["preferredIpv4", "ipv4"], ["preferredIpv6", "ipv6"]] as const) {
@@ -1356,6 +1395,10 @@ export const hostsRouter = router({
           });
         }
         await db.updateHost(id, data as any);
+        if (agentPanelUrlChanged) {
+          appendPanelLog("info", `[AgentConnection] host=${id} customPanelUrl=${(data as any).agentPanelUrlEnabled ? "enabled" : "disabled"}; refresh requested`);
+          pushAgentRefresh(id, "host-agent-panel-url-updated", { urgent: true });
+        }
         if (ddnsConfigChanged || primarySelectionChanged) {
           scheduleHostDdnsUpdate({ ...host, ...(data as any), id }, "host-ddns-config-updated", { force: true });
         }
@@ -1390,7 +1433,7 @@ export const hostsRouter = router({
         }
         return { success: true };
       }),
-    prepareDelete: protectedProcedure
+    prepareDelete: adminProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ input, ctx }) => {
         const host = await db.getHostById(input.id);
@@ -1402,7 +1445,7 @@ export const hostsRouter = router({
           if (ctx.user.role !== "admin" && latest.userId !== ctx.user.id) throw new Error("无权操作此主机");
         } });
       }),
-    deleteImpact: protectedProcedure
+    deleteImpact: adminProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .query(async ({ input, ctx }) => {
         const host = await db.getHostById(input.id);
@@ -1410,7 +1453,7 @@ export const hostsRouter = router({
         if (ctx.user.role !== "admin" && host.userId !== ctx.user.id) throw new Error("无权操作此主机");
         return getHostDeletionImpact(input.id, ctx.user);
       }),
-    delete: protectedProcedure
+    delete: adminProcedure
       .input(z.object({ id: z.number().int().positive(), confirmOfflineCleanup: z.boolean().optional() }))
       .mutation(async ({ input, ctx }) => {
         const host = await db.getHostById(input.id);
@@ -1426,15 +1469,15 @@ export const hostsRouter = router({
         });
       }),
     metrics: protectedProcedure
-      .input(z.object({ hostId: z.number(), limit: z.number().default(60), live: z.boolean().optional() }))
+      .input(z.object({ hostId: z.number(), limit: z.number().int().min(1).max(1440).default(60), live: z.boolean().optional() }))
       .query(async ({ input, ctx }) => {
         await requireHostAccess(ctx, input.hostId);
-        if (input.live) return db.getLatestHostMetrics(input.hostId, input.limit);
-        return hostQueryCache.get(
+        const rows = input.live ? await db.getLatestHostMetrics(input.hostId, input.limit) : await hostQueryCache.get(
           `metrics:${ctx.user.id}:${input.hostId}:${input.limit}`,
           { ttlMs: 10_000, staleMs: 60_000 },
           () => db.getLatestHostMetrics(input.hostId, input.limit),
         );
+        return rows.map((row: any) => ({ ...row, networkSampleAgeMs: hostNetworkSampleAgeMs(row) }));
       }),
     latestMetricsSummary: protectedProcedure
       .input(z.object({ hostIds: z.array(z.number()).max(500).optional() }).optional())
@@ -1444,8 +1487,12 @@ export const hostsRouter = router({
           .filter((id) => Number.isInteger(id) && id > 0)));
         if (hostIds.length === 0) return [];
         await requireHostsAccess(ctx, hostIds);
-        const rows = await displayQueries.metrics("hosts.metrics", hostIds, () => db.getLatestHostMetricRows(hostIds));
-        return (rows as any[]).map(compactHostMetricSummary).filter((row) => row.hostId > 0);
+        const [rows, statuses] = await Promise.all([
+          displayQueries.metrics("hosts.metrics", hostIds, () => db.getLatestHostMetricRows(hostIds)),
+          db.getHostStatusRows({ hostIds }),
+        ]);
+        const onlineHostIds = new Set(statuses.filter((host: { isOnline?: boolean }) => host.isOnline).map((host: { id: number }) => Number(host.id)));
+        return (rows as any[]).map((row) => compactHostMetricSummary(row, onlineHostIds.has(Number(row.hostId)))).filter((row) => row.hostId > 0);
       }),
     traffic: protectedProcedure
       .input(z.object({ hostId: z.number() }))
@@ -1516,8 +1563,7 @@ export const hostsRouter = router({
         appendPanelLog("info", `[AgentUpgrade] request host=${host.id} name=${host.name} current=${currentVersion || "-"} target=${targetVersion}`);
         await assertAgentReleaseAssetsReady(targetVersion);
         await db.requestHostAgentUpgrade(input.hostId, targetVersion);
-        const configuredPanelUrl = (await db.getSetting("panelPublicUrl")) || "";
-        const panelUrl = /^https?:\/\//.test(configuredPanelUrl) ? configuredPanelUrl.replace(/\/+$/, "") : "";
+        const panelUrl = await resolveAgentAdvertisedPanelUrl(host);
         const pushed = pushAgentUpgrade(input.hostId, targetVersion, panelUrl);
         return { success: true, pushed };
       }),
@@ -1525,8 +1571,6 @@ export const hostsRouter = router({
       .input(z.object({ hostIds: z.array(z.number()).min(1).max(500), targetVersion: z.string().max(64).nullable().optional() }))
       .mutation(async ({ input }) => {
         const targetVersion = normalizeVersion(input.targetVersion || AGENT_VERSION);
-        const configuredPanelUrl = (await db.getSetting("panelPublicUrl")) || "";
-        const panelUrl = /^https?:\/\//.test(configuredPanelUrl) ? configuredPanelUrl.replace(/\/+$/, "") : "";
         let requested = 0;
         let pushed = 0;
         let skippedLatest = 0;
@@ -1565,14 +1609,14 @@ export const hostsRouter = router({
           await db.requestHostAgentUpgrade(host.id, targetVersion, null, requestedAt);
           requested += 1;
           if (delayMs === 0) {
-            if (pushAgentUpgrade(host.id, targetVersion, panelUrl)) pushed += 1;
+            if (pushAgentUpgrade(host.id, targetVersion, await resolveAgentAdvertisedPanelUrl(host))) pushed += 1;
           } else {
             scheduled += 1;
             const timer = setTimeout(() => {
-              void db.getHostById(Number(host.id)).then((currentHost: any) => {
+              void db.getHostById(Number(host.id)).then(async (currentHost: any) => {
                 if (!currentHost?.agentUpgradeRequested) return;
                 if (normalizeVersion(currentHost.agentUpgradeTargetVersion) !== targetVersion) return;
-                pushAgentUpgrade(host.id, targetVersion, panelUrl);
+                pushAgentUpgrade(host.id, targetVersion, await resolveAgentAdvertisedPanelUrl(currentHost));
               }).catch((error) => {
                 console.warn(`[AgentUpgrade] scheduled push failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
               });

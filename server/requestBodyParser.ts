@@ -5,12 +5,29 @@ import { setBoundedMapValue } from "./boundedCache";
 
 const MB = 1024 * 1024;
 
+export function rejectRequestBody(req: Request, res: Response, status: number, code: string) {
+  if (res.headersSent || res.destroyed) return;
+  if (status === 429) res.setHeader("Retry-After", "60");
+  // Never leave an unread rejected body on a keep-alive connection.
+  res.setHeader("Connection", "close");
+  res.once("finish", () => {
+    if (req.complete || req.destroyed) return;
+    req.resume();
+    req.socket.end();
+    const closeTimer = setTimeout(() => req.destroy(), 1000);
+    closeTimer.unref();
+    req.socket.once("close", () => clearTimeout(closeTimer));
+  });
+  res.status(status).json({ error: code });
+}
+
 // Admission happens before raw-body buffers or JSON objects are allocated.
 // This is a process resource bound, not a substitute for edge DDoS protection.
 export function createBoundedBodyParser(options: {
   maxConcurrent?: number;
   maxPerIp?: number;
   timeoutMs?: number;
+  jsonLimitBytes?: number;
   largeBodyLimit?: number;
   globalLargeBodyLimit?: number;
   maxLargeRequests?: number;
@@ -20,6 +37,7 @@ export function createBoundedBodyParser(options: {
   const maxConcurrent = options.maxConcurrent ?? 8;
   const maxPerIp = options.maxPerIp ?? 4;
   const timeoutMs = options.timeoutMs ?? 20_000;
+  const jsonLimitBytes = options.jsonLimitBytes ?? 10 * MB;
   const largeBodyLimit = options.largeBodyLimit ?? 12;
   const globalLargeBodyLimit = options.globalLargeBodyLimit ?? 120;
   const maxLargeRequests = options.maxLargeRequests ?? 4;
@@ -43,23 +61,7 @@ export function createBoundedBodyParser(options: {
     return entry;
   }
 
-  const reject = (req: Request, res: Response, status: number, code: string) => {
-    if (res.headersSent || res.destroyed) return;
-    if (status === 429) res.setHeader("Retry-After", "60");
-    // Never leave an unread rejected body on a keep-alive connection.
-    res.setHeader("Connection", "close");
-    res.once("finish", () => {
-      if (req.complete || req.destroyed) return;
-      // Let the error response reach upload clients before closing. Immediate
-      // destroy() resets the socket and hides the useful 413/429 response.
-      req.pause();
-      req.socket.end();
-      const closeTimer = setTimeout(() => req.destroy(), 1000);
-      closeTimer.unref();
-      req.socket.once("close", () => clearTimeout(closeTimer));
-    });
-    res.status(status).json({ error: code });
-  };
+  const reject = rejectRequestBody;
 
   return (req, res, next) => {
     const json = Boolean(req.is("application/json"));
@@ -68,7 +70,7 @@ export function createBoundedBodyParser(options: {
     if ((!json && !form) || !hasBody) return next();
     const ip = req.ip || req.socket.remoteAddress || "unknown";
     const length = Number(req.headers["content-length"] || 0);
-    if (length > (json ? 10 * MB : MB)) return reject(req, res, 413, "REQUEST_BODY_TOO_LARGE");
+    if (length > (json ? jsonLimitBytes : MB)) return reject(req, res, 413, "REQUEST_BODY_TOO_LARGE");
     if (length > MB || req.headers["transfer-encoding"] !== undefined
       || (req.headers["content-encoding"] && req.headers["content-encoding"] !== "identity")) {
       const entry = windowFor(ip);
@@ -116,7 +118,7 @@ export function createBoundedBodyParser(options: {
     }
     active++;
     activeByIp.set(ip, (activeByIp.get(ip) || 0) + 1);
-    const limit = json ? 10 * MB : MB;
+    const limit = json ? jsonLimitBytes : MB;
     const encoding = (req.headers["content-encoding"] || "identity").toLowerCase();
     const decoder = encoding === "gzip" ? createGunzip() : encoding === "deflate" ? createInflate() : undefined;
     const sizeGate = () => {
@@ -186,7 +188,7 @@ export function createBoundedBodyParser(options: {
     if (decoded !== wire) decoded.on("error", fail);
     if (encoding !== "identity" && !decoder) return fail({ status: 415 });
     const parser = json
-      ? express.json({ limit: "10mb" })
+      ? express.json({ limit: jsonLimitBytes })
       : express.urlencoded({ limit: "1mb", extended: true, parameterLimit: 1000 });
     parser(parserRequest as unknown as Request, res, (error?: { status?: number }) => {
       if (released) return;
