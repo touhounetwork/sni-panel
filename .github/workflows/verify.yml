@@ -16,8 +16,6 @@ jobs:
         run: node scripts/verify.mjs prepare
       - name: Languages
         run: node scripts/verify.mjs language
-      - name: Functional checks including SNI categories and DNS stability
-        run: node scripts/verify.mjs functional
       - name: Documentation build and commit identity
         run: node scripts/verify.mjs docs
       - name: Preserve validated build outputs
@@ -36,6 +34,27 @@ jobs:
         with:
           name: verification-panel
           path: .release/verification-panel.tar.gz
+          include-hidden-files: true
+  functional:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/validation-setup
+      - name: Functional checks (each test file once, shard ${{ matrix.shard }} of 4)
+        run: node scripts/verify.mjs functional-${{ matrix.shard }}
+      - name: Archive check evidence
+        if: always()
+        run: mkdir -p .release/checks && tar -czf .release/verification-functional-${{ matrix.shard }}.tar.gz .release/checks
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-functional-${{ matrix.shard }}
+          path: .release/verification-functional-${{ matrix.shard }}.tar.gz
           include-hidden-files: true
   performance:
     runs-on: ubuntu-24.04

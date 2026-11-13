@@ -6,7 +6,7 @@
 
 基线为 Ubuntu 24.04、Node 22.23.3、pnpm 10.28.1、Go 1.24.13（转发运行时 GOST 源码要求 Go 1.24；`go.mod` 的 `go` 声明不变）。先运行 `pnpm install --frozen-lockfile`。Linux amd64 主机装好 Docker、jq、iptables、iproute2、util-linux，并提供可用的 MySQL 8 服务后，设置 `FORWARDX_TEST_MYSQL_URL`，运行 `pnpm verify`。这会执行全部检查；缺少数据库、jq 或运行平台不符合时会报错，不以跳过代替通过。
 
-单独排查可运行 `node scripts/verify.mjs prepare,language,functional,docs`、`node scripts/verify.mjs performance`、`node scripts/verify.mjs mysql` 或 `node scripts/verify.mjs agent`。先执行 prepare，保证依赖网页产物的检查不读旧文件。Mac 的测试通过只能作为开发依据，不能封存成 Linux 发布清单。
+单独排查可运行 `node scripts/verify.mjs prepare,language,functional-1,functional-2,functional-3,functional-4,docs`、`node scripts/verify.mjs performance`、`node scripts/verify.mjs mysql` 或 `node scripts/verify.mjs agent`。先执行 prepare，保证依赖网页产物的检查不读旧文件。Mac 的测试通过只能作为开发依据，不能封存成 Linux 发布清单。
 
 每组结果和完整命令日志保存在 `.release/checks/`。性能检查独立运行，文件并行数为 1；四类场景固定三轮，每轮 20 批、每批七条、最多六条并发，每批严格少于五秒。超时保留逐请求的完成数量及待完成阶段。DNS 两种并发场景各 100 次，FXP 在 1 核和 4 核各 1000 次，并运行竞态检查。
 
@@ -14,8 +14,8 @@
 
 | 原来源 | 新位置 | 保留内容 |
 | --- | --- | --- |
-| CI 面板检查 | prepare / language / functional / docs | 版本、双语说明、类型、网页构建、全部原 UI 和服务端脚本、AI、自测下发、文档构建 |
-| 原 pretest:server | functional 显式执行 | 前置服务端和资源检查；关闭自动前后置脚本，避免隐式依赖或重复 |
+| CI 面板检查 | prepare / language / functional-1…4 / docs | 版本、双语说明、类型、网页构建、文档构建；功能检查收集 package.json 中全部 `test:*` 脚本（不含 i18n、MySQL、SNI 批量性能与真浏览器套件）的测试文件，每个文件只运行一次，用 `--test-shard` 分成 4 个并行作业 |
+| 原 pretest:server | functional 分片 | 文件并入功能检查清单；关闭自动前后置脚本，避免隐式依赖或重复 |
 | 原 SNI 批量矩阵 | performance 独立任务 | 四类、全部原行为断言、七条/六并发/五秒，固定三轮 |
 | 原工单新增但未固定的测试 | test:sni-classification | 服务端及网页分类、域名异常、延迟存储及执行器 |
 | CI MySQL 升级 | mysql | 真实 MySQL 8 历史升级、清理与保留检查；无连接配置即失败 |
@@ -28,7 +28,7 @@
 
 ## 发布顺序
 
-仅向 `touhounetwork/sni-panel` 的 main 推送。完成审查并获得推送、发布授权后，main 与新的版本标签一起推到 `origin` 远端；禁止向 `owo10086` 远端发布，不移动已有标签。当前面板 3.5.2，Agent/FXP 3.5.0，原生应用排除。
+仅向 `touhounetwork/sni-panel` 的 main 推送。完成审查并获得推送、发布授权后，main 与新的版本标签一起推到 `origin` 远端；禁止向 `owo10086` 远端发布，不移动已有标签。当前面板 3.10.0，Agent/FXP 3.10.0，原生应用排除。
 
 统一发布工作流只接受版本标签。日常检查产物与正式发布检查使用同一清单；本次发布检查内的产物构建一次，通过后交给后续步骤，不另取 main 或重建二进制。
 

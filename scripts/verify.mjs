@@ -7,19 +7,37 @@ export const baseline = { os: 'ubuntu-24.04', node: 'v22.23.3', pnpm: '10.28.1',
 export const groups = {
   prepare: [['pnpm', 'check:versions'], ['pnpm', 'test:release-notes'], ['node', '--test', 'scripts/release/protocol.test.mjs', 'scripts/release/cli.test.mjs'], ['pnpm', 'exec', 'tsc', '--noEmit'], ['pnpm', 'build']],
   language: [['pnpm', 'test:i18n']],
-  functional: [],
   docs: [['pnpm', 'docs:build'], ['node', 'scripts/release/verify-docs.mjs']],
   performance: [['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'server/sniBatchEdit.performance.test.ts']],
   mysql: [['pnpm', 'test:database-upgrade']],
   agent: [['bash', 'scripts/release/verify-agent.sh']],
 };
-const scripts = ['ui', 'login-ui', 'startup', 'auth-captcha', 'billing-export', 'host-addresses', 'china-health', 'observability', 'support', 'affiliates', 'avatars', 'latency-history', 'agent-proxy', 'deployment-docs', 'google-auth', 'port-access-limits', 'plan-display', 'product-stock', 'host-deletion', 'host-notifications', 'user-selection', 'operations', 'payments', 'list-settings', 'url-probe', 'motion', 'host-load', 'performance', 'plugin-bbr', 'rule-groups', 'server', 'ai', 'selftest-dispatch', 'sni-classification'];
-scripts.push('rule-batch', 'rule-tasks', 'ai-models', 'globe-ui', 'resource-traffic', 'security-boundaries', 'developer-announcements', 'database-network');
-groups.functional = scripts.flatMap(name => name === 'server' ? [['pnpm', 'pretest:server'], ['pnpm', 'test:server']] : [['pnpm', `test:${name}`]]);
-// These two shell integration checks otherwise report SKIP when jq is absent.
-groups.functional.unshift(['bash', '-c', 'command -v jq >/dev/null || { echo "Functional checks require jq; install jq before continuing" >&2; exit 1; }']);
-groups.functional.push(['node', '--import', 'tsx', '--test', 'server/tunnelProbeReporting.test.ts']);
-groups.functional.push(['node', '--import', 'tsx', '--test', '--test-name-pattern=port entry SNI|automatically enqueue', 'server/sniForwardGroup.test.ts']);
+// Functional checks: every test file from package.json test scripts runs exactly
+// once (several scripts list the same files), split into parallel CI shards.
+// Groups with their own environment run elsewhere: i18n (language), MySQL,
+// the serial SNI batch benchmark (performance) and the real-browser suite.
+export const FUNCTIONAL_SHARDS = 4;
+const FUNCTIONAL_EXCLUDED = new Set(['test:release-notes', 'test:i18n', 'test:database-upgrade', 'test:sni-performance', 'test:web-browser']);
+export function functionalTestFiles(scripts = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts) {
+  const files = [];
+  for (const [name, cmd] of Object.entries(scripts)) {
+    if (!(name.startsWith('test:') || name === 'pretest:server') || FUNCTIONAL_EXCLUDED.has(name)) continue;
+    for (const file of cmd.match(/\b(?:server|client|shared|scripts)\/\S+?\.test\.(?:ts|tsx|mjs)\b/g) || []) if (!files.includes(file)) files.push(file);
+  }
+  // Not listed in any package script; previously run on its own.
+  if (!files.includes('server/tunnelProbeReporting.test.ts')) files.push('server/tunnelProbeReporting.test.ts');
+  return files;
+}
+const functionalFiles = functionalTestFiles();
+for (let shard = 1; shard <= FUNCTIONAL_SHARDS; shard++) {
+  groups[`functional-${shard}`] = [
+    // Shell integration checks otherwise report SKIP when jq is absent.
+    ['bash', '-c', 'command -v jq >/dev/null || { echo "Functional checks require jq; install jq before continuing" >&2; exit 1; }'],
+    // Startup integration tests read the production client build.
+    ['pnpm', 'build'],
+    ['node', '--import', 'tsx', '--test', `--test-shard=${shard}/${FUNCTIONAL_SHARDS}`, ...functionalFiles],
+  ];
+}
 const command = (cmd, args = []) => spawnSync(cmd, args, { encoding: 'utf8' });
 export function verify(selected = 'all') {
   const requested = selected === 'all' ? Object.keys(groups) : selected.split(',');
