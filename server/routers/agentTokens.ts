@@ -7,6 +7,8 @@ import * as db from "../db";
 import { maskToken } from "./helpers";
 import { isHostStatusOnline } from "../hostStatusNotifier";
 import { hostAgentPanelUrlOverride } from "../../shared/agentPanelUrl";
+import { supersedeAgentEventClient } from "../agentEvents";
+import { recordConfigAuditEvent } from "../configAudit";
 
 function ruleOwnerSummary(owners: Array<{ userId: number; username: string | null; name: string | null; ruleCount: number }>) {
   const visibleOwners = owners.slice(0, 5);
@@ -120,6 +122,25 @@ export const agentTokensRouter = router({
           return { success: true, releasedPendingCleanup, removedHosts };
         });
       });
+    }),
+  reset: adminProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ input }) => {
+      const { hostIds } = await withDatabaseTransaction(async () => {
+        const current = await db.getAgentTokenById(input.id);
+        if (!current) throw new Error("Token 不存在");
+        return { hostIds: await db.replaceAgentToken(current.id, current.token, nanoid(32)) };
+      });
+      for (const hostId of hostIds) {
+        // The running Agent keeps its forwarding but stops using the old Token;
+        // reinstalling with the new Token takes the host over again.
+        supersedeAgentEventClient(hostId);
+        await recordConfigAuditEvent({
+          resourceType: "host", resourceId: hostId, hostId, action: "update", source: "admin:agent-token-reset",
+          before: { agentAuth: "previous" }, after: { agentAuth: "reset" },
+        });
+      }
+      return { success: true, hostCount: hostIds.length };
     }),
   getInstallToken: adminProcedure
     .input(z.object({ id: z.number().optional(), token: z.string().optional() }))

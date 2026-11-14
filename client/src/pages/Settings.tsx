@@ -56,6 +56,7 @@ import {
   type SidebarMenuKey,
   type SidebarMenuSettings,
 } from "@shared/sidebarMenu";
+import { HOST_OFFLINE_NOTIFY_MAX_MINUTES, HOST_OFFLINE_NOTIFY_MIN_MINUTES, normalizeHostOfflineNotifyMinutes } from "@shared/hostHeartbeat";
 import {
   MAX_CUSTOM_SIDEBAR_ICON_BYTES,
   MAX_CUSTOM_SIDEBAR_PAGES,
@@ -2239,6 +2240,7 @@ function TelegramBotSettingsCard() {
   const [telegramTrafficReminder, setTelegramTrafficReminder] = useState(false);
   const [telegramHostStatusNotify, setTelegramHostStatusNotify] = useState(false);
   const [telegramTrafficThreshold, setTelegramTrafficThreshold] = useState(20);
+  const [telegramOfflineMinutes, setTelegramOfflineMinutes] = useState(normalizeHostOfflineNotifyMinutes(undefined));
   const [showDeleteTelegramBot, setShowDeleteTelegramBot] = useState(false);
 
   useEffect(() => {
@@ -2250,6 +2252,7 @@ function TelegramBotSettingsCard() {
       setTelegramTrafficReminder(telegramReady && !!settings.telegram?.trafficReminder);
       setTelegramHostStatusNotify(telegramReady && !!settings.telegram?.hostStatusNotify);
       setTelegramTrafficThreshold(Number(settings.telegram?.trafficReminderThreshold || 20));
+      setTelegramOfflineMinutes(normalizeHostOfflineNotifyMinutes(settings.telegram?.hostOfflineNotifyMinutes));
     }
   }, [settings]);
 
@@ -2289,6 +2292,7 @@ function TelegramBotSettingsCard() {
         trafficReminder: remindersReady ? telegramTrafficReminder : false,
         hostStatusNotify: remindersReady ? telegramHostStatusNotify : false,
         trafficReminderThreshold: telegramTrafficThreshold,
+        hostOfflineNotifyMinutes: telegramOfflineMinutes,
       },
     });
     setTelegramBotTokenInput("");
@@ -2427,6 +2431,18 @@ function TelegramBotSettingsCard() {
                     onCheckedChange={setTelegramHostStatusNotify}
                   />
                 </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <Label className="shrink-0 text-xs text-muted-foreground">{translateText("离线通知等待（分钟）")}</Label>
+                  <Input
+                    type="number"
+                    min={HOST_OFFLINE_NOTIFY_MIN_MINUTES}
+                    max={HOST_OFFLINE_NOTIFY_MAX_MINUTES}
+                    value={telegramOfflineMinutes}
+                    onChange={(e) => setTelegramOfflineMinutes(normalizeHostOfflineNotifyMinutes(e.target.value))}
+                    className="h-8 w-24"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">{translateText("从最后一次联系起算，期间恢复则不通知；不影响在线状态、故障转移和 DDNS。")}</p>
               </div>
               <div className="rounded-lg border border-border/40 bg-background/50 p-3">
                 <div className="flex items-center justify-between gap-3">

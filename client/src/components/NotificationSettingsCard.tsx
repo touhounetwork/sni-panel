@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import DiscordAccountCard from "./DiscordAccountCard";
+import { HOST_OFFLINE_NOTIFY_MAX_MINUTES, HOST_OFFLINE_NOTIFY_MIN_MINUTES, normalizeHostOfflineNotifyMinutes } from "@shared/hostHeartbeat";
 
 export default function NotificationSettingsCard({ telegram }: { telegram: ReactNode }) {
   const utils = trpc.useUtils();
@@ -42,7 +43,8 @@ function DiscordBotSettings() {
   const [traffic, setTraffic] = useState(false);
   const [status, setStatus] = useState(false);
   const [threshold, setThreshold] = useState(20);
-  useEffect(() => { if (discord) { setEnabled(discord.enabled); setExpiry(discord.expiryReminder); setTraffic(discord.trafficReminder); setStatus(discord.hostStatusNotify); setThreshold(discord.trafficReminderThreshold); } }, [discord]);
+  const [offlineMinutes, setOfflineMinutes] = useState(normalizeHostOfflineNotifyMinutes(undefined));
+  useEffect(() => { if (discord) { setEnabled(discord.enabled); setExpiry(discord.expiryReminder); setTraffic(discord.trafficReminder); setStatus(discord.hostStatusNotify); setThreshold(discord.trafficReminderThreshold); setOfflineMinutes(discord.hostOfflineNotifyMinutes); } }, [discord]);
   const update = trpc.system.updateSettings.useMutation({ onSuccess: () => { setToken(""); void utils.system.getSettings.invalidate(); void utils.discord.status.invalidate(); toast.success(t("Discord 配置已保存")); }, onError: (error) => toast.error(error.message) });
   const test = trpc.discord.testSend.useMutation({ onSuccess: () => toast.success(t("测试消息已发送，请查看 Discord 私聊")), onError: (error) => toast.error(error.message) });
   const refresh = trpc.discord.refreshProfile.useMutation({ onSuccess: () => { void utils.system.getSettings.invalidate(); toast.success(t("机器人身份与指令已同步")); }, onError: (error) => toast.error(error.message) });
@@ -53,9 +55,10 @@ function DiscordBotSettings() {
       <div className="flex items-center justify-between gap-3"><Label className="min-w-0 leading-snug">{t("到期提醒")}</Label><Switch className="shrink-0" checked={expiry} onCheckedChange={setExpiry} /></div>
       <div className="flex items-center justify-between gap-3"><Label className="min-w-0 leading-snug">{t("流量提醒")}</Label><Switch className="shrink-0" checked={traffic} onCheckedChange={setTraffic} /></div>
       <div className="flex items-center justify-between gap-3"><Label className="min-w-0 leading-snug">{t("主机上线/离线通知")}</Label><Switch className="shrink-0" checked={status} onCheckedChange={setStatus} /></div>
+      <div className="flex flex-wrap items-center gap-3"><Label>{t("离线通知等待（分钟）")}</Label><div className="flex shrink-0 items-center gap-2"><Input className="w-24" type="number" min={HOST_OFFLINE_NOTIFY_MIN_MINUTES} max={HOST_OFFLINE_NOTIFY_MAX_MINUTES} value={offlineMinutes} onChange={(event) => setOfflineMinutes(normalizeHostOfflineNotifyMinutes(event.target.value))} /></div><p className="w-full text-xs text-muted-foreground">{t("从最后一次联系起算，期间恢复则不通知；不影响在线状态、故障转移和 DDNS。")}</p></div>
       <div className="flex flex-wrap items-center gap-3"><Label>{t("剩余流量阈值")}</Label><div className="flex shrink-0 items-center gap-2"><Input className="w-24" type="number" min={1} max={99} value={threshold} onChange={(event) => setThreshold(Math.min(99, Math.max(1, Number(event.target.value) || 20)))} /><span>%</span></div></div>
       <p className="text-sm text-muted-foreground">{connection?.connected ? t("机器人已连接") : t("机器人未连接；请确认已选择 Discord 并检查 Token")}</p>
-      <div className="responsive-actions flex flex-wrap gap-2"><AsyncButton pending={update.isPending} onClick={() => update.mutate({ discord: { enabled, botToken: token.trim() || undefined, expiryReminder: expiry, trafficReminder: traffic, hostStatusNotify: status, trafficReminderThreshold: threshold } })}>{t("保存配置")}</AsyncButton>
+      <div className="responsive-actions flex flex-wrap gap-2"><AsyncButton pending={update.isPending} onClick={() => update.mutate({ discord: { enabled, botToken: token.trim() || undefined, expiryReminder: expiry, trafficReminder: traffic, hostStatusNotify: status, trafficReminderThreshold: threshold, hostOfflineNotifyMinutes: offlineMinutes } })}>{t("保存配置")}</AsyncButton>
         <Button variant="outline" disabled={!discord?.active || test.isPending} onClick={() => test.mutate()}>{t("测试发送")}</Button>
         <Button variant="outline" disabled={!discord?.configured || refresh.isPending} onClick={() => refresh.mutate()}>{t("校验并同步")}</Button>
         {discord?.tokenSource === "database" && <Button variant="destructive" disabled={update.isPending} onClick={async () => { if (await confirm({ title: t("删除 Discord 机器人"), description: t("删除 Bot Token 并关闭机器人，保留用户绑定。") })) update.mutate({ discord: { enabled: false, clearToken: true } }); }}>{t("删除机器人")}</Button>}

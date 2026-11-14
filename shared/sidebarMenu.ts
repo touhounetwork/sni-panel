@@ -40,9 +40,8 @@ export function isSidebarMenuVisible(
   key?: SidebarMenuKey,
   viewer: { isAdmin?: boolean; hasAffiliateHistory?: boolean } = {},
 ): boolean {
-  // Administrators keep management access, and users keep access to past commissions.
-  if ((key === "tickets" || key === "affiliates") && viewer.isAdmin) return true;
-  if (key === "affiliates" && viewer.hasAffiliateHistory) return true;
+  // Users keep access to past commissions; administrators follow the menu setting.
+  if (key === "affiliates" && viewer.hasAffiliateHistory && !viewer.isAdmin) return true;
   return !key || settings[key] !== false;
 }
 

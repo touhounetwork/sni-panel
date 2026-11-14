@@ -37,6 +37,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RotateCcw,
   Server,
   Terminal,
   Trash2,
@@ -194,12 +195,14 @@ function TokenActionButtons({
   loadingScriptTokenId,
   onOpenScript,
   onEdit,
+  onReset,
   onDelete,
 }: {
   tokenItem: any;
   loadingScriptTokenId: number | null;
   onOpenScript: (id: number) => void;
   onEdit: (tokenItem: any) => void;
+  onReset: (tokenItem: any) => void;
   onDelete: (tokenItem: any) => void;
 }) {
   return (
@@ -230,6 +233,15 @@ function TokenActionButtons({
       <Button
         variant="ghost"
         size="icon"
+        className="h-8 w-8"
+        title={translateText("重置 Token")}
+        onClick={() => onReset(tokenItem)}
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
         className="h-8 w-8 text-destructive hover:text-destructive"
         title={translateText("删除 Token")}
         onClick={() => onDelete(tokenItem)}
@@ -245,6 +257,7 @@ function AgentTokenCard({
   loadingScriptTokenId,
   onOpenScript,
   onEdit,
+  onReset,
   onDelete,
   dragHandle,
   sortableClassName,
@@ -253,6 +266,7 @@ function AgentTokenCard({
   loadingScriptTokenId: number | null;
   onOpenScript: (id: number) => void;
   onEdit: (tokenItem: any) => void;
+  onReset: (tokenItem: any) => void;
   onDelete: (tokenItem: any) => void;
   dragHandle?: any;
   sortableClassName?: string;
@@ -302,6 +316,7 @@ function AgentTokenCard({
             loadingScriptTokenId={loadingScriptTokenId}
             onOpenScript={onOpenScript}
             onEdit={onEdit}
+            onReset={onReset}
             onDelete={onDelete}
           />
         </div>
@@ -426,6 +441,7 @@ export default function AgentTokenManager({
   const [editingToken, setEditingToken] = useState<any>(null);
   const [editDescription, setEditDescription] = useState("");
   const [tokenToDelete, setTokenToDelete] = useState<any | null>(null);
+  const [tokenToReset, setTokenToReset] = useState<any | null>(null);
   const [internalViewMode, setInternalViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [installAddressMode, setInstallAddressMode] = useState<InstallAddressMode>("public");
   const lastCreateSignalRef = useRef(0);
@@ -556,6 +572,16 @@ export default function AgentTokenManager({
           : translateText("Token 已删除"));
     },
     onError: (err) => toast.error(err.message || translateText("删除 Token 失败")),
+  });
+
+  const resetTokenMutation = trpc.agentTokens.reset.useMutation({
+    onSuccess: (_data, variables) => {
+      utils.agentTokens.list.invalidate();
+      utils.agentTokens.getInstallToken.invalidate();
+      toast.success(translateText("Token 已重置，请在节点上用新的安装命令重新安装"));
+      void openScriptDialog(variables.id);
+    },
+    onError: (err) => toast.error(err.message || translateText("重置 Token 失败")),
   });
 
   const updateTokenMutation = trpc.agentTokens.update.useMutation({
@@ -757,6 +783,7 @@ export default function AgentTokenManager({
                               loadingScriptTokenId={loadingScriptTokenId}
                               onOpenScript={openScriptDialog}
                               onEdit={openEditToken}
+                              onReset={setTokenToReset}
                               onDelete={setTokenToDelete}
                               dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={tokenReorderPending} />}
                               sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
@@ -780,6 +807,7 @@ export default function AgentTokenManager({
                             loadingScriptTokenId={loadingScriptTokenId}
                             onOpenScript={openScriptDialog}
                             onEdit={openEditToken}
+                            onReset={setTokenToReset}
                             onDelete={setTokenToDelete}
                             dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={tokenReorderPending} />}
                             sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
@@ -846,6 +874,7 @@ export default function AgentTokenManager({
                             loadingScriptTokenId={loadingScriptTokenId}
                             onOpenScript={openScriptDialog}
                             onEdit={openEditToken}
+                            onReset={setTokenToReset}
                             onDelete={setTokenToDelete}
                           />
                         </TableCell>
@@ -981,6 +1010,34 @@ export default function AgentTokenManager({
                 description: editDescription.trim() || null,
               })}
             >{translateText("保存")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!tokenToReset} onOpenChange={(open) => !open && setTokenToReset(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5" />{translateText("重置 Agent Token")}</DialogTitle>
+            <DialogDescription>{translateText("生成新 Token 并保留关联主机、转发规则和组成员；旧 Token 立即失效。正在运行的 Agent 保留现有转发但停止与面板同步，需在节点上用新的安装命令重新安装。")}</DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-sm">
+            <div className="font-mono break-all">{tokenToReset?.token}</div>
+            {tokenToReset?.host?.name && (
+              <div className="mt-2 flex gap-2 text-xs text-muted-foreground"><span>{translateText("对应主机")}</span><span className="font-medium text-foreground">{tokenToReset.host.name}</span></div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTokenToReset(null)}>{translateText("取消")}</Button>
+            <Button
+              disabled={resetTokenMutation.isPending || !tokenToReset}
+              onClick={() => {
+                if (!tokenToReset) return;
+                const id = tokenToReset.id;
+                setTokenToReset(null);
+                resetTokenMutation.mutate({ id });
+              }}
+            >{translateText("确认重置")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

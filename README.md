@@ -230,7 +230,7 @@ ForwardX Agent also includes the third-party userspace WireGuard implementation 
 
 ## 3.5.1：规则显示与 SNI 独立分类
 
-面板更新为 3.5.1，Agent／FXP 保持 3.5.0。新增独立的「sni规则组」，普通「全部」排除 SNI；域名缺失提示直接显示在相关组头下。优化资源展开、流量详情、更多菜单与行内延迟重测，保留本地入口健康、DDNS、计费和权限判断。从 3.5.0 升级只需更新面板，更早版本仍须按说明升级配套 Agent／FXP。发布附件以[本项目 Releases](https://github.com/touhounetwork/sni-panel/releases/tag/v3.5.1)为准；兼容与验证边界见[版本说明](docs/guide/releases.md)。
+面板更新为 3.5.1，Agent／FXP 保持 3.5.0。新增独立的「SNI 规则组」，普通「全部」排除 SNI；域名缺失提示直接显示在相关组头下。优化资源展开、流量详情、更多菜单与行内延迟重测，保留本地入口健康、DDNS、计费和权限判断。从 3.5.0 升级只需更新面板，更早版本仍须按说明升级配套 Agent／FXP。发布附件以[本项目 Releases](https://github.com/touhounetwork/sni-panel/releases/tag/v3.5.1)为准；兼容与验证边界见[版本说明](docs/guide/releases.md)。
 
 [Agent proxy](docs/guide/agent-proxy-manager.en.md) · [SSH management](docs/guide/ssh-management.md) · [Affiliates](docs/guide/affiliates.md) · [Support tickets](docs/guide/support-tickets.md)
 

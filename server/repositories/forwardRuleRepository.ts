@@ -636,7 +636,7 @@ function buildForwardRuleSqlFilter(
       tokenClauses.push(forwardRuleResourceCategorySql() + " = ?");
       tokenParams.push(category);
     }
-    if ("sni规则组 sni".includes(token)) {
+    if ("SNI规则组 sni".toLowerCase().includes(token)) {
       tokenClauses.push(categorySql + " = ?");
       tokenParams.push("sni");
     }

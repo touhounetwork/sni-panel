@@ -30,7 +30,8 @@ import { parseAdminCopyRecipients, sendMail } from "../email";
 import { SMTP_SECURITY_MODES, effectiveSmtpSecurityMode, resolveSmtpSecurityMode } from "../smtpTransport";
 import { refreshTelegramBotProfile, resetTelegramBotPolling, startTelegramBot } from "../telegramBot";
 import { refreshDiscordBotProfile, resetDiscordBot, startDiscordBot, discordConnectionStatus } from "../discordBot";
-import { notificationChannel, publicNotificationSettings } from "../notificationSettings";
+import { notificationChannel, notificationSettings, publicNotificationSettings } from "../notificationSettings";
+import { HOST_OFFLINE_NOTIFY_MAX_MINUTES, HOST_OFFLINE_NOTIFY_MIN_MINUTES } from "../../shared/hostHeartbeat";
 import { validateDiscordBotToken } from "../discordCredentials";
 import { pushAgentRefresh, pushAgentSupportBundle, pushAgentUpgrade, requestHostTcping } from "../agentEvents";
 import { resolveAgentAdvertisedPanelUrl } from "../agentPanelUrl";
@@ -133,6 +134,7 @@ const ANDROID_APK_DOWNLOAD_URL =
 const UPDATE_CHECK_COOLDOWN_MS = 60 * 1000;
 const UPGRADE_ASSETS_PENDING_EXIT_CODE = 12;
 const DEFAULT_DOCKER_IMAGE = "ghcr.io/touhounetwork/sni-panel:latest";
+const hostOfflineNotifyMinutesSchema = z.number().int().min(HOST_OFFLINE_NOTIFY_MIN_MINUTES).max(HOST_OFFLINE_NOTIFY_MAX_MINUTES);
 const forwardProtocolSettingsSchema = z.object(
   Object.fromEntries(
     [...FORWARD_TYPES, ...TUNNEL_PROTOCOLS].map((key) => [key, z.boolean().optional()])
@@ -1745,6 +1747,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       trafficReminder: false,
       trafficReminderThreshold: 20,
       hostStatusNotify: false,
+      hostOfflineNotifyMinutes: notificationSettings(all, "telegram").hostOfflineNotifyMinutes,
     },
     notificationChannel: notificationChannel(all),
     supportTicketNotificationsEnabled: all.supportTicketNotificationsEnabled !== "false",
@@ -1937,6 +1940,7 @@ export const systemRouter = router({
         trafficReminder: all.telegramTrafficReminder === "true",
         trafficReminderThreshold: Number(all.telegramTrafficReminderThreshold || 20),
         hostStatusNotify: all.telegramHostStatusNotify === "true",
+        hostOfflineNotifyMinutes: notificationSettings(all, "telegram").hostOfflineNotifyMinutes,
       },
       notificationChannel: notificationChannel(all),
       supportTicketNotificationsEnabled: all.supportTicketNotificationsEnabled !== "false",
@@ -2111,6 +2115,7 @@ export const systemRouter = router({
           trafficReminder: z.boolean().optional(),
           trafficReminderThreshold: z.number().int().min(1).max(99).optional(),
           hostStatusNotify: z.boolean().optional(),
+          hostOfflineNotifyMinutes: hostOfflineNotifyMinutesSchema.optional(),
         }).optional(),
         notificationChannel: z.enum(["telegram", "discord"]).optional(),
         supportTicketNotificationsEnabled: z.boolean().optional(),
@@ -2118,6 +2123,7 @@ export const systemRouter = router({
           enabled: z.boolean().optional(), botToken: z.string().max(256).optional(), clearToken: z.boolean().optional(),
           expiryReminder: z.boolean().optional(), trafficReminder: z.boolean().optional(),
           trafficReminderThreshold: z.number().int().min(1).max(99).optional(), hostStatusNotify: z.boolean().optional(),
+          hostOfflineNotifyMinutes: hostOfflineNotifyMinutesSchema.optional(),
         }).optional(),
         deepseek: z.object({
           provider: aiProviderSchema.optional(),
@@ -2379,6 +2385,7 @@ export const systemRouter = router({
         if (input.telegram.expiryReminder !== undefined) next.telegramExpiryReminder = input.telegram.expiryReminder && nextEnabled && !!effectiveToken ? "true" : "false";
         if (input.telegram.trafficReminder !== undefined) next.telegramTrafficReminder = input.telegram.trafficReminder && nextEnabled && !!effectiveToken ? "true" : "false";
         if (input.telegram.trafficReminderThreshold !== undefined) next.telegramTrafficReminderThreshold = String(input.telegram.trafficReminderThreshold);
+        if (input.telegram.hostOfflineNotifyMinutes !== undefined) next.telegramHostOfflineNotifyMinutes = String(input.telegram.hostOfflineNotifyMinutes);
         if (input.telegram.hostStatusNotify !== undefined) next.telegramHostStatusNotify = input.telegram.hostStatusNotify && nextEnabled && !!effectiveToken ? "true" : "false";
         let tokenChanged = false;
         if (input.telegram.clearToken) {
@@ -2430,6 +2437,7 @@ export const systemRouter = router({
           if (input.discord[field] !== undefined) next[key] = input.discord[field] ? "true" : "false";
         }
         if (input.discord.trafficReminderThreshold !== undefined) next.discordTrafficReminderThreshold = String(input.discord.trafficReminderThreshold);
+        if (input.discord.hostOfflineNotifyMinutes !== undefined) next.discordHostOfflineNotifyMinutes = String(input.discord.hostOfflineNotifyMinutes);
         await db.setSettings(next);
         resetDiscordBot();
         if (token && enabled && !input.discord.clearToken) {

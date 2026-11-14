@@ -86,6 +86,12 @@ export function isHostStatusOnline(host: any) {
     && !isPresenceCapableHostConfirmedOffline(host?.id);
 }
 
+// Remaining wait before an offline alert, counted from the host's last contact.
+async function offlineNotificationDelayMs(lastSeenAt: number, now = Date.now()) {
+  const windowMs = notificationSettings(await db.getAllSettings()).hostOfflineNotifyMinutes * 60_000;
+  return lastSeenAt > 0 ? Math.max(0, lastSeenAt + windowMs - now) : 0;
+}
+
 async function telegramHostStatusEnabled() {
   const settings = await db.getAllSettings();
   const channel = notificationSettings(settings);
@@ -232,6 +238,7 @@ export async function handlePresenceCapableHostOffline(event: AgentFastLivenessT
       if (!event.isCurrent()) return;
       await notifyHostStatusChange(host, "offline");
     }),
+    await offlineNotificationDelayMs(Number(event.lastSeenAt || 0), event.offlineAt),
   );
   console.info(`[HostStatus] Fast offline confirmed host=${hostId} silenceMs=${Math.max(0, event.offlineAt! - (event.lastSeenAt || event.offlineAt!))}`);
 }
@@ -312,7 +319,16 @@ export async function sweepOfflineHostsAndNotify() {
     void db.scheduleForwardGroupsForHostHealthChange(Number(host.id)).catch((error) => {
       console.warn(`[HostStatus] Offline forward-group evaluation failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
     });
-    await notifyHostStatusChange(host, "offline");
+    const lastSeenAt = new Date(host.lastHeartbeat as any).getTime();
+    const delayMs = await offlineNotificationDelayMs(Number.isFinite(lastSeenAt) ? lastSeenAt : 0);
+    if (delayMs <= 0) {
+      await notifyHostStatusChange(host, "offline");
+      continue;
+    }
+    // Recovery cancels this timer; re-check the stored state before alerting.
+    fastOfflineNotificationDebouncer.schedule(host.id, () => true, async () => {
+      if (!isHostStatusOnline(await db.getHostById(Number(host.id)))) await notifyHostStatusChange(host, "offline");
+    }, delayMs);
   }
   return transitionedHosts.length;
 }

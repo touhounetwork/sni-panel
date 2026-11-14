@@ -3,8 +3,8 @@
   "一次最多删除 500 个兑换码": "Delete up to 500 redemption codes at a time",
   "一次最多批量处理 50 个工单": "Process up to 50 tickets at a time",
   "当前页超过 100 个套餐，请切换到更小的每页条数后再排序": "This page has more than 100 plans. Select a smaller page size before sorting.",
-  "sni规则组": "SNI rule groups",
-  "查看 sni规则组": "View SNI rule groups",
+  "SNI 规则组": "SNI rule groups",
+  "查看 SNI 规则组": "View SNI rule groups",
   "域名配置不一致": "Domain configuration differs",
   "入口「{0}:{1}」的域名配置不完整，缺少：{2}": "Entry {0}:{1} has incomplete domain configuration. Missing: {2}",
   "以上为面板规则配置核对，实际生效状态请查看分流器信息。": "This compares panel rule configuration. Check the splitter information for the applied state.",
@@ -5802,5 +5802,12 @@
   "隧道拓扑已变化，请刷新后重试": "The tunnel topology has changed. Refresh and try again.",
   "此 V1 Mimic 链路暂不支持独立 UDP 测速，请使用 TCP": "This V1 Mimic link does not support standalone UDP speed tests yet. Use TCP instead.",
   "代入模式下不能付款、充值、兑换、提现或管理令牌，请让用户本人操作": "While viewing as this user you cannot pay, top up, redeem, withdraw or manage tokens. Ask the user to do this themselves.",
-  "为保护账号安全，请在与机器人的私聊中使用指令。": "To protect your account, use commands in a private chat with the bot."
+  "为保护账号安全，请在与机器人的私聊中使用指令。": "To protect your account, use commands in a private chat with the bot.",
+  "离线通知等待（分钟）": "Offline alert delay (minutes)",
+  "从最后一次联系起算，期间恢复则不通知；不影响在线状态、故障转移和 DDNS。": "Counted from the last contact; no alert if the host recovers in time. Online status, failover and DDNS are not affected.",
+  "重置 Token": "Reset Token",
+  "重置 Agent Token": "Reset Agent Token",
+  "Token 已重置，请在节点上用新的安装命令重新安装": "Token reset. Reinstall the Agent on the node with the new install command.",
+  "重置 Token 失败": "Failed to reset Token",
+  "生成新 Token 并保留关联主机、转发规则和组成员；旧 Token 立即失效。正在运行的 Agent 保留现有转发但停止与面板同步，需在节点上用新的安装命令重新安装。": "Generates a new Token and keeps the linked host, forwarding rules and group memberships. The old Token stops working immediately. The running Agent keeps its existing forwarding but stops syncing with the panel; reinstall it on the node with the new install command."
 }

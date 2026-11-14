@@ -43,6 +43,7 @@ export class HostOfflineNotificationDebouncer {
     hostIdValue: unknown,
     isCurrent: () => boolean,
     notify: () => void | Promise<void>,
+    delayMs = this.delayMs,
   ) {
     const hostId = positiveHostId(hostIdValue);
     if (!hostId) return false;
@@ -71,7 +72,7 @@ export class HostOfflineNotificationDebouncer {
       } catch (error) {
         this.reportError(error, hostId);
       }
-    }, this.delayMs);
+    }, Math.max(0, delayMs));
     timer.unref?.();
     this.pending.set(hostId, { generation, timer });
     return true;

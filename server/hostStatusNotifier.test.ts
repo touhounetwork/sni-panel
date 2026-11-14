@@ -19,14 +19,16 @@ let notifier: typeof import("./hostStatusNotifier");
 let router: typeof import("./routers/hosts").hostsRouter;
 const context = (id: number, role: "admin" | "user") => ({ user: { id, role, username: `user-${id}` }, req: { headers: {}, socket: {} }, res: {}, authSession: null, authFailureReason: null }) as any;
 const delayedNotifications: Array<() => void> = [];
+const delayedNotificationDelays: number[] = [];
 const originalSetTimeout = globalThis.setTimeout;
 
 before(async () => {
   // Install before importing routes/repositories, which can load the notifier.
-  // Capture only the offline debounce timer; all other timers remain real.
+  // Capture only offline-alert waits (minutes); all other timers remain real.
   globalThis.setTimeout = ((callback: () => void, delay: number, ...args: any[]) => {
-    if (delay === 30_000) {
+    if (delay >= 60_000) {
       delayedNotifications.push(callback);
+      delayedNotificationDelays.push(delay);
       return { unref() {} } as any;
     }
     return originalSetTimeout(callback, delay, ...args);
@@ -147,10 +149,12 @@ test("queued fast-offline notification reads the latest saved preference, not it
     await hosts.touchHostHeartbeat(1);
     await notifier.primeHostStatusNotifier();
     delayedNotifications.length = 0;
+    delayedNotificationDelays.length = 0;
     const now = Date.now();
     await notifier.handlePresenceCapableHostOffline({ kind: "confirmed-offline", hostId: 1, agentVersion: "2.2.198", transitionEpoch: 1,
       lastSeenAt: now - 20_000, deadlineAt: now, offlineAt: now, lastOfflineAt: now, confirmedOffline: true, isCurrent: () => true });
     assert.equal(delayedNotifications.length, 1);
+    assert.deepEqual(delayedNotificationDelays, [5 * 60_000 - 20_000], "default wait is five minutes from the last contact");
     await hosts.updateHost(1, { hostStatusNotifyEnabled: false });
     delayedNotifications.shift()!();
     await (await import("./keyedTaskLock")).withKeyedTaskLock("agent-liveness:1", async () => {});
@@ -160,5 +164,69 @@ test("queued fast-offline notification reads the latest saved preference, not it
     assert.ok(rows.length > 0, "muting must not suppress downtime observations");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("offline alerts wait for the configured minutes since last contact and are dropped when the host recovers first", async () => {
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url, options) => {
+    requests.push(String(options?.body || ""));
+    return Response.json({ ok: true, result: { message_id: 1 } });
+  }) as typeof fetch;
+  const silentFor = async (seconds: number) => {
+    await runtime.executeRaw('UPDATE hosts SET "isOnline" = 1, "lastHeartbeat" = ? WHERE id = 1', [Math.floor(Date.now() / 1000) - seconds]);
+    assert.equal(await notifier.sweepOfflineHostsAndNotify(), 1);
+    assert.equal((await hosts.getHostById(1))?.isOnline, false, "online state does not wait for the alert");
+  };
+  const online = async () => {
+    await hosts.touchHostHeartbeat(1);
+    await notifier.notifyHostOnlineIfNeeded(await hosts.getHostById(1));
+  };
+  try {
+    await settings.setSettings({ notificationChannel: "telegram", telegramHostStatusNotify: "true", telegramHostOfflineNotifyMinutes: "10" });
+    await hosts.updateHost(1, { hostStatusNotifyEnabled: true });
+    await online();
+    await notifier.primeHostStatusNotifier();
+    requests.length = 0;
+    delayedNotifications.length = 0;
+    delayedNotificationDelays.length = 0;
+
+    await silentFor(200);
+    assert.equal(requests.length, 0, "not alerted before the configured wait");
+    assert.equal(delayedNotifications.length, 1);
+    assert.ok(Math.abs(delayedNotificationDelays[0] - 400_000) <= 2_000, `remaining wait ${delayedNotificationDelays[0]}`);
+    await online();
+    delayedNotifications.shift()!();
+    await new Promise((resolve) => originalSetTimeout(resolve, 25));
+    assert.equal(requests.filter((body) => body.includes("离线告警")).length, 0, "recovery before the wait drops the alert");
+
+    requests.length = 0;
+    delayedNotifications.length = 0;
+    await silentFor(200);
+    delayedNotifications.shift()!();
+    await new Promise((resolve) => originalSetTimeout(resolve, 25));
+    assert.equal(requests.filter((body) => body.includes("离线告警")).length, 1, "still offline after the wait alerts once");
+
+    await online();
+    requests.length = 0;
+    delayedNotifications.length = 0;
+    await silentFor(700);
+    assert.equal(delayedNotifications.length, 0);
+    assert.equal(requests.filter((body) => body.includes("离线告警")).length, 1, "already past the wait alerts immediately");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await settings.setSetting("telegramHostOfflineNotifyMinutes", null);
+  }
+});
+
+test("offline alert delay is read per channel, defaults to five minutes and stays within range", async () => {
+  const { notificationSettings } = await import("./notificationSettings");
+  assert.equal(notificationSettings({}, "telegram").hostOfflineNotifyMinutes, 5);
+  const saved = { telegramHostOfflineNotifyMinutes: "15", discordHostOfflineNotifyMinutes: "30" };
+  assert.equal(notificationSettings(saved, "telegram").hostOfflineNotifyMinutes, 15);
+  assert.equal(notificationSettings(saved, "discord").hostOfflineNotifyMinutes, 30);
+  for (const [value, expected] of [["0", 5], ["abc", 5], ["9999", 1440], ["0.4", 1]] as const) {
+    assert.equal(notificationSettings({ telegramHostOfflineNotifyMinutes: value }, "telegram").hostOfflineNotifyMinutes, expected, value);
   }
 });

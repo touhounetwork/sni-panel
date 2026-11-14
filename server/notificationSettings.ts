@@ -1,4 +1,5 @@
 import { ENV } from "./env";
+import { normalizeHostOfflineNotifyMinutes } from "../shared/hostHeartbeat";
 import { getAllSettings } from "./repositories/settingsRepository";
 
 export type NotificationChannel = "telegram" | "discord";
@@ -23,6 +24,7 @@ export function notificationSettings(settings: Record<string, string | null | un
     trafficReminder: settings[`${channel}TrafficReminder`] === "true",
     trafficReminderThreshold: Number.isFinite(threshold) ? Math.min(99, Math.max(1, threshold)) : 20,
     hostStatusNotify: settings[`${channel}HostStatusNotify`] === "true",
+    hostOfflineNotifyMinutes: normalizeHostOfflineNotifyMinutes(settings[`${channel}HostOfflineNotifyMinutes`]),
     supportTicketNotificationsEnabled: settings.supportTicketNotificationsEnabled !== "false",
   };
 }

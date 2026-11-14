@@ -4236,7 +4236,7 @@ function RulesContent() {
               <SelectItem value="tunnel">{translateText("隧道转发")}</SelectItem>
               <SelectItem value="chain">{translateText("转发链")}</SelectItem>
               <SelectItem value="group">{translateText("转发组")}</SelectItem>
-              <SelectItem value="sni">{translateText("sni规则组")}</SelectItem>
+              <SelectItem value="sni">{translateText("SNI 规则组")}</SelectItem>
             </SelectContent>
           </Select>
           {isOwnRuleScope && <Select value={copyRulePersonalGroupId === null ? "all" : String(copyRulePersonalGroupId)} disabled={copyActionPending} onValueChange={(value) => {
@@ -4422,7 +4422,7 @@ function RulesContent() {
     { value: "tunnel", label: desktopRuleTypeLabels.tunnel, icon: Network, badge: ruleCategoryCountsReady ? ruleCategoryCounts.tunnel : null },
     { value: "chain", label: desktopRuleTypeLabels.chain, icon: GitBranch, badge: ruleCategoryCountsReady ? ruleCategoryCounts.chain : null },
     { value: "group", label: desktopRuleTypeLabels.group, icon: Layers3, badge: ruleCategoryCountsReady ? ruleCategoryCounts.group : null },
-    { value: "sni", label: translateText("sni规则组"), icon: Globe, badge: ruleCategoryCountsReady ? ruleCategoryCounts.sni : null },
+    { value: "sni", label: translateText("SNI 规则组"), icon: Globe, badge: ruleCategoryCountsReady ? ruleCategoryCounts.sni : null },
   ], [ruleCategoryCounts, ruleCategoryCountsReady]);
   const visibleRuleIdsForMetrics = useMemo(() => (
     Array.from(new Set(filteredRules.map((rule: any) => Number(rule.id)).filter((id: number) => Number.isInteger(id) && id > 0)))

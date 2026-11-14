@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [3.10.2] - 2026-11-14
+
+### Features and improvements
+
+- Token management adds "Reset Token": a new Token is generated in place, the linked host, forwarding rules and group memberships are kept, and the old Token stops working immediately. The running Agent keeps its forwarding and stops syncing; reinstall with the install command shown afterwards to take over the same host. Creating a new Token and deleting the old one is no longer needed.
+
+### Fixes and improvements
+
+- The rule category "sni规则组" in the Chinese interface is now written "SNI 规则组"; the English label stays "SNI rule groups".
+- Configurable host offline alert delay: Settings → Notification channels adds "Offline alert delay (minutes)", default 5 (1–1440), counted from the host's last contact; no alert is sent if the host recovers first. Telegram and Discord keep their own value. Offline detection for online status, failover and DDNS is unchanged. Alerts previously arrived about 2 minutes after a host went silent; the default is now 5 minutes.
+- The Tickets and Affiliates switches in the menu display settings now apply to administrators too, so turning them off hides them from the administrator sidebar as well; the pages stay reachable by address, and users with past commissions still see the affiliate entry.
+
+### Version and upgrade notes
+
+- Panel: `3.10.2`; Agent and ForwardX FXP runtime: `3.10.0`. Upgrades from 3.10.0/3.10.1 require only the panel update.
+- After upgrading, host offline alerts are sent after 5 minutes without contact by default (previously about 2 minutes); adjust it in the notification channel settings.
+- The Tickets and Affiliates menus now follow the menu display switches. If they were never turned on, administrators no longer see them in the sidebar; enable them under Settings → Menu display.
+
 ## [3.10.1] - 2026-11-14
 
 ### Features and improvements

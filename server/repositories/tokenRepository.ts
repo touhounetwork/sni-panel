@@ -199,3 +199,27 @@ export async function deleteAgentToken(id: number) {
   await db.delete(agentTokens).where(eq(agentTokens.id, id));
   await afterDatabaseCommit(() => invalidateAgentAuthTokenCandidates());
 }
+
+// Rotates a Token in place: the host, its rules and memberships stay attached.
+// Returns the hosts that were authenticating with the previous value.
+export async function replaceAgentToken(id: number, previous: string, next: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const q = quoteIdentifier;
+  const hostRows = await queryRaw<{ id: number }>(
+    `SELECT ${q("id")} FROM ${q("hosts")} WHERE ${q("agentToken")} = ?`,
+    [previous],
+  );
+  await executeRaw(
+    `UPDATE ${q("agent_tokens")} SET ${q("token")} = ? WHERE ${q("id")} = ? AND ${q("token")} = ?`,
+    [next, id, previous],
+  );
+  const current = await getAgentTokenById(id);
+  if (current?.token !== next) throw new Error("Token 已变化，请刷新后重试");
+  await executeRaw(
+    `UPDATE ${q("hosts")} SET ${q("agentToken")} = ?, ${q("updatedAt")} = ? WHERE ${q("agentToken")} = ?`,
+    [next, nowDate(), previous],
+  );
+  await afterDatabaseCommit(() => invalidateAgentAuthTokenCandidates());
+  return hostRows.map((row) => Number(row.id)).filter((hostId) => Number.isInteger(hostId) && hostId > 0);
+}

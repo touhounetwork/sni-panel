@@ -29,8 +29,8 @@ const entryVisibilityCases = [
   { isAdmin: false, menuEnabled: false, hasAffiliateHistory: true, affiliates: true, tickets: false },
   { isAdmin: false, menuEnabled: true, hasAffiliateHistory: false, affiliates: true, tickets: true },
   { isAdmin: false, menuEnabled: true, hasAffiliateHistory: true, affiliates: true, tickets: true },
-  { isAdmin: true, menuEnabled: false, hasAffiliateHistory: false, affiliates: true, tickets: true },
-  { isAdmin: true, menuEnabled: false, hasAffiliateHistory: true, affiliates: true, tickets: true },
+  { isAdmin: true, menuEnabled: false, hasAffiliateHistory: false, affiliates: false, tickets: false },
+  { isAdmin: true, menuEnabled: false, hasAffiliateHistory: true, affiliates: false, tickets: false },
   { isAdmin: true, menuEnabled: true, hasAffiliateHistory: false, affiliates: true, tickets: true },
   { isAdmin: true, menuEnabled: true, hasAffiliateHistory: true, affiliates: true, tickets: true },
 ];
