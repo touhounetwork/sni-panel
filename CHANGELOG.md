@@ -12,6 +12,7 @@
 
 ### 修复与改进
 
+- 修复使用 MariaDB 11.6.2 及以上版本时，编辑或新建规则偶发「Record has changed since last read in table 'users'」：保存时锁定规则所属用户，而流量上报持续更新同一行，新版 MariaDB 默认的快照隔离会直接报错。现在这类冲突（`ER_CHECKREAD`）与死锁一样自动整体重试，最多 3 次；不需要再修改 `innodb_snapshot_isolation`。
 - 修复面板启动后新添加的主机第一次离线时不发离线通知、恢复时却发上线通知的问题。
 
 ### 版本与升级说明

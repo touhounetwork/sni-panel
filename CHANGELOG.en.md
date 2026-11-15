@@ -12,6 +12,7 @@
 
 ### Fixes and improvements
 
+- Fix occasional "Record has changed since last read in table 'users'" when editing or creating rules on MariaDB 11.6.2 or later: saving locks the rule owner's row while traffic reports keep updating it, and MariaDB's default snapshot isolation fails instead of waiting. These conflicts (`ER_CHECKREAD`) are now retried as a whole like deadlocks, up to three attempts; `innodb_snapshot_isolation` no longer needs changing.
 - Fix hosts added after the panel started not sending an offline alert on their first outage while still sending the online notice when they recovered.
 
 ### Version and upgrade notes

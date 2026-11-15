@@ -4,7 +4,10 @@ export function isRetryableTransactionConflict(error: unknown): boolean {
   const seen = new Set<unknown>();
   for (let current: any = error; current && !seen.has(current); current = current.cause) {
     seen.add(current);
+    // MariaDB 11.6.2+ (innodb_snapshot_isolation) reports a row committed by
+    // another transaction after this snapshot as ER_CHECKREAD instead of waiting.
     if (current.code === "ER_LOCK_DEADLOCK" || Number(current.errno) === 1213
+      || current.code === "ER_CHECKREAD" || Number(current.errno) === 1020
       || current.code === "40P01" || current.code === "40001") return true;
     if (seen.size >= 8) break;
   }

@@ -5,6 +5,7 @@ import { MAX_PERSONAL_RULE_GROUPS, type PersonalRuleGroup } from "../../shared/r
 import { getDb, getDatabaseKind, insertAndGetId, isDatabaseTransactionActive, queryRaw, withDatabaseTransaction } from "../dbRuntime";
 import { sqlBool } from "./repositoryUtils";
 import { quoteIdentifier } from "../dbCompat";
+import { isRetryableTransactionConflict } from "../transactionRetry";
 
 // Drizzle removes column qualifiers in single-table projections. Keep the
 // outer reference explicit inside correlated subqueries (not the inner id).
@@ -25,9 +26,9 @@ export async function withPersonalRuleGroupLock<T>(userId: number, work: () => P
           if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "用户不存在" });
           return await work();
         } catch (error) {
-          const mysqlError = error as { code?: string; errno?: number } | null;
-          retryDeadlock = ownsTransaction && getDatabaseKind() === "mysql"
-            && (mysqlError?.code === "ER_LOCK_DEADLOCK" || mysqlError?.errno === 1213);
+          // Deadlocks, and MariaDB snapshot conflicts on the owner row that
+          // traffic reports keep updating. Nested callers retry at their own top.
+          retryDeadlock = ownsTransaction && getDatabaseKind() === "mysql" && isRetryableTransactionConflict(error);
           throw error;
         }
       });

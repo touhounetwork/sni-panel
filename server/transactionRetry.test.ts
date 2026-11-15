@@ -37,3 +37,9 @@ test("conflict retries are bounded to three total attempts", async () => {
   }, true), /deadlock/);
   assert.equal(calls, 3);
 });
+
+test("MariaDB snapshot conflicts (ER_CHECKREAD) are retryable", () => {
+  for (const error of [{ code: "ER_CHECKREAD" }, { errno: 1020 }, { cause: { code: "ER_CHECKREAD", errno: 1020 } }]) {
+    assert.equal(isRetryableTransactionConflict(error), true);
+  }
+});

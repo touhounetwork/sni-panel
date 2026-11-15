@@ -1571,7 +1571,8 @@ export async function createDirectForwardRuleForActor(
       }
       return id;
     };
-    const id = normalizedSni ? await db.withDatabaseTransaction(persistDirectRule) : await persistDirectRule();
+    // Safe to replay: only database writes and idempotent reservation releases.
+    const id = normalizedSni ? await db.withDatabaseTransaction(persistDirectRule, { retryConflicts: true }) : await persistDirectRule();
     await quotaReservation.release();
     quotaReservation = null;
     if (!options.deferRefresh && tunnelId) {
@@ -3417,7 +3418,8 @@ export const crudRulesRouter = router({
           await db.clearForwardRuleTunnelExits(id);
         }
       };
-      if (normalizeSniValue(rule.sni) || nextDirectRuleSni) await db.withDatabaseTransaction(persistDirectUpdate);
+      // Safe to replay: only database writes and idempotent reservation releases.
+      if (normalizeSniValue(rule.sni) || nextDirectRuleSni) await db.withDatabaseTransaction(persistDirectUpdate, { retryConflicts: true });
       else await persistDirectUpdate();
       await refreshUpdatedRulePortWarnings();
       for (const affectedTunnelId of affectedTunnelIdsForRefresh) {
