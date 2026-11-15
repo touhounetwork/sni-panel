@@ -4702,7 +4702,7 @@
   "转发组事件": "Forwarding group events",
   "开启来源采集": "Enable source collection",
   "查询 IP 归属地": "Look up source regions",
-  "将保存入口可见的来源 IP、关联规则和采样字节数，保留 30 天。最多采集每台主机每天 5000 个 IP/规则组合，关闭不影响转发。请确认符合你的隐私政策。": "Stores ingress-visible IPs, related rules and sampled bytes for 30 days. Limited to 5000 IP/rule pairs per host per day. Disabling collection does not affect forwarding. Check your privacy policy before enabling.",
+  "将保存入口可见的来源 IP、关联规则和采样字节数，保留 30 天。最多采集每台主机每天 5000 个 IP/规则组合，关闭不影响转发。SNI 分流规则需要入口 Agent 3.11.0 或更高版本。请确认符合你的隐私政策。": "Stores ingress-visible IPs, related rules and sampled bytes for 30 days. Limited to 5000 IP/rule pairs per host per day. Disabling collection does not affect forwarding. SNI routing rules require entry Agent 3.11.0 or later. Check your privacy policy before enabling.",
   "将向 ipapi.co 查询最多 8 个尚未定位的来源 IP。该服务可能限流；结果仅供参考，不代表用户真实位置。继续即同意发送这些 IP。": "Looks up up to 8 unlocated source IPs using ipapi.co. Rate limits may apply; results are approximate, not users' actual locations. Continuing consents to sending these IPs.",
   "关联规则与采样流量（最多展示 100 项）": "Related rules and sampled traffic (up to 100 entries)",
   "已定位 {0}/{1} 个 IP": "Located {0}/{1} IPs",

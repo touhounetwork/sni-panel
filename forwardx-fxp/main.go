@@ -142,7 +142,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "3.10.0"
+	fxpRuntimeVersion    = "3.11.0"
 	fxpFallbackRetry     = 5 * time.Second
 	fxpFallbackDial      = 3 * time.Second
 	fxpShutdownDrain     = 5 * time.Second
@@ -1720,6 +1720,8 @@ func handleSniSplitterTCP(client net.Conn, cfg config, store *sniRouteTableStore
 	if runtime.counter != nil {
 		runtime.counter.connections.Add(1)
 	}
+	sourceConn := trackSourceConnection(store.cfg, runtime.route.RuleID, clientAddr)
+	defer sourceConn.close()
 	if runtime.route.ProxyProtocolSend {
 		// The header is transport metadata: neither rate limited nor counted.
 		if err := writeAll(target, formatProxyProtocolInfo(runtime.route.ProxyProtocolVersion, source)); err != nil {
@@ -1734,9 +1736,16 @@ func handleSniSplitterTCP(client net.Conn, cfg config, store *sniRouteTableStore
 		if runtime.counter != nil {
 			runtime.counter.in.Add(uint64(len(hello)))
 		}
+		if sourceConn != nil {
+			sourceConn.counter.in.Add(uint64(len(hello)))
+		}
 	}
 	fxpVerbosef("sni-splitter tcp routed rule=%d listen=%d version=%d client=%s sni=%s target=%s:%d", runtime.route.RuleID, cfg.ListenPort, version, clientAddr, runtime.route.SNI, runtime.route.TargetIP, runtime.route.TargetPort)
-	return proxyPlainTCPWithCounter(client, target, runtime.inLimiter, runtime.outLimiter, runtime.counter)
+	var sourceCounter *trafficCounter
+	if sourceConn != nil {
+		sourceCounter = &sourceConn.counter
+	}
+	return proxyPlainTCPWithCounter(client, target, runtime.inLimiter, runtime.outLimiter, runtime.counter, sourceCounter)
 }
 
 // sniPrefixedConn replays bytes read past a PROXY header before reading the
@@ -1935,18 +1944,20 @@ func tlsUint24(data []byte) int {
 }
 
 func proxyPlainTCP(left, right net.Conn, leftToRightLimiter, rightToLeftLimiter *limiter) error {
-	return proxyPlainTCPWithCounter(left, right, leftToRightLimiter, rightToLeftLimiter, nil)
+	return proxyPlainTCPWithCounter(left, right, leftToRightLimiter, rightToLeftLimiter)
 }
 
-func proxyPlainTCPWithCounter(left, right net.Conn, leftToRightLimiter, rightToLeftLimiter *limiter, counter *trafficCounter) error {
+func proxyPlainTCPWithCounter(left, right net.Conn, leftToRightLimiter, rightToLeftLimiter *limiter, counters ...*trafficCounter) error {
 	errCh := make(chan error, 2)
-	var leftToRightCounter, rightToLeftCounter *atomic.Uint64
-	if counter != nil {
-		leftToRightCounter = &counter.in
-		rightToLeftCounter = &counter.out
+	var leftToRightCounters, rightToLeftCounters []*atomic.Uint64
+	for _, counter := range counters {
+		if counter != nil {
+			leftToRightCounters = append(leftToRightCounters, &counter.in)
+			rightToLeftCounters = append(rightToLeftCounters, &counter.out)
+		}
 	}
-	go func() { errCh <- copyPlainTCPWithCounter(right, left, leftToRightLimiter, leftToRightCounter) }()
-	go func() { errCh <- copyPlainTCPWithCounter(left, right, rightToLeftLimiter, rightToLeftCounter) }()
+	go func() { errCh <- copyPlainTCPWithCounter(right, left, leftToRightLimiter, leftToRightCounters...) }()
+	go func() { errCh <- copyPlainTCPWithCounter(left, right, rightToLeftLimiter, rightToLeftCounters...) }()
 	return waitBidirectional(errCh, func() {
 		_ = left.Close()
 		_ = right.Close()
@@ -1954,10 +1965,10 @@ func proxyPlainTCPWithCounter(left, right net.Conn, leftToRightLimiter, rightToL
 }
 
 func copyPlainTCP(dst, src net.Conn, limiter *limiter) error {
-	return copyPlainTCPWithCounter(dst, src, limiter, nil)
+	return copyPlainTCPWithCounter(dst, src, limiter)
 }
 
-func copyPlainTCPWithCounter(dst, src net.Conn, limiter *limiter, counter *atomic.Uint64) error {
+func copyPlainTCPWithCounter(dst, src net.Conn, limiter *limiter, counters ...*atomic.Uint64) error {
 	buf := getFXPByteBuffer(32 * 1024)
 	defer putFXPByteBuffer(buf)
 	for {
@@ -1967,7 +1978,7 @@ func copyPlainTCPWithCounter(dst, src net.Conn, limiter *limiter, counter *atomi
 			if writeErr := writeAll(dst, buf[:n]); writeErr != nil {
 				return writeErr
 			}
-			if counter != nil {
+			for _, counter := range counters {
 				counter.Add(uint64(n))
 			}
 		}

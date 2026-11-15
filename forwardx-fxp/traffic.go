@@ -36,8 +36,10 @@ type trafficBatchValue struct {
 }
 
 type pendingTrafficBatch struct {
-	reportID string
-	byRule   map[int]trafficBatchValue
+	reportID  string
+	byRule    map[int]trafficBatchValue
+	sources   []map[string]any
+	sampledAt int64
 }
 
 var trafficBatchMu sync.Mutex
@@ -89,7 +91,7 @@ func enqueueTrafficForRule(cfg config, ruleID int, bytesIn, bytesOut uint64, con
 		)
 		return
 	}
-	key := trafficBatchKey{panelURL: panelURL, token: token, producerID: fxpTrafficProducerID(cfg), installationID: cfg.InstallationID}
+	key, _ := trafficBatchKeyForConfig(cfg)
 	trafficBatchMu.Lock()
 	byRule := trafficBatches[key]
 	if byRule == nil {
@@ -103,6 +105,13 @@ func enqueueTrafficForRule(cfg config, ruleID int, bytesIn, bytesOut uint64, con
 	byRule[ruleID] = current
 	trafficBatchMu.Unlock()
 	startTrafficBatchWorker()
+}
+
+func trafficBatchKeyForConfig(cfg config) (trafficBatchKey, bool) {
+	panelURL := strings.TrimRight(strings.TrimSpace(cfg.PanelURL), "/")
+	token := strings.TrimSpace(cfg.Token)
+	key := trafficBatchKey{panelURL: panelURL, token: token, producerID: fxpTrafficProducerID(cfg), installationID: cfg.InstallationID}
+	return key, panelURL != "" && token != ""
 }
 
 func trafficConfigDiagnosticKey(cfg config, missing []string) string {
@@ -283,12 +292,20 @@ func postTrafficBatch(key trafficBatchKey, pending pendingTrafficBatch) bool {
 			"ruleId": ruleID, "bytesIn": value.bytesIn, "bytesOut": value.bytesOut, "connections": value.connections,
 		})
 	}
-	env, err := encryptEnvelope(map[string]any{
+	payload := map[string]any{
 		"installationId":   key.installationID,
 		"stats":            stats,
 		"reportId":         pending.reportID,
 		"reportProducerId": key.producerID,
-	}, key.token)
+	}
+	if len(pending.sources) > 0 {
+		fxpVerbosef("traffic batch source samples=%d report=%s", len(pending.sources), pending.reportID)
+		// Attributed by the SNI route itself, unlike port-based conntrack samples.
+		payload["sourceSamples"] = pending.sources
+		payload["sourceSampledAt"] = pending.sampledAt
+		payload["sourceKind"] = "sni-route"
+	}
+	env, err := encryptEnvelope(payload, key.token)
 	if err != nil {
 		logTrafficDiagnostic(
 			"encrypt:"+key.producerID,
@@ -326,6 +343,7 @@ func postTrafficBatch(key trafficBatchKey, pending pendingTrafficBatch) bool {
 		)
 		return false
 	}
+	applySourceAnalyticsPolicy(resp.Body, key.token)
 	return true
 
 }
@@ -357,28 +375,30 @@ func trafficBatchPendingSnapshot() map[trafficBatchKey]pendingTrafficBatch {
 	for key := range trafficPendingReports {
 		keys[key] = struct{}{}
 	}
+	for _, key := range sourceSampleBatches() {
+		keys[key] = struct{}{}
+	}
 	out := make(map[trafficBatchKey]pendingTrafficBatch, len(keys))
 	for key := range keys {
-		if pending := trafficPendingReports[key]; len(pending.byRule) > 0 {
+		if pending, ok := trafficPendingReports[key]; ok && (len(pending.byRule) > 0 || len(pending.sources) > 0) {
 			copy := make(map[int]trafficBatchValue, len(pending.byRule))
 			for ruleID, value := range pending.byRule {
 				copy[ruleID] = value
 			}
-			out[key] = pendingTrafficBatch{reportID: pending.reportID, byRule: copy}
+			out[key] = pendingTrafficBatch{reportID: pending.reportID, byRule: copy, sources: pending.sources, sampledAt: pending.sampledAt}
 			continue
 		}
 		current := trafficBatches[key]
-		if len(current) == 0 {
-			continue
-		}
 		copy := make(map[int]trafficBatchValue, len(current))
 		for ruleID, value := range current {
 			if value.bytesIn > 0 || value.bytesOut > 0 || value.connections > 0 {
 				copy[ruleID] = value
 			}
 		}
-		if len(copy) > 0 {
-			pending := pendingTrafficBatch{reportID: newFXPTrafficReportID(), byRule: copy}
+		// Drained once per report ID so a retried report carries identical samples.
+		sources := takeSourceSamples(key)
+		if len(copy) > 0 || len(sources) > 0 {
+			pending := pendingTrafficBatch{reportID: newFXPTrafficReportID(), byRule: copy, sources: sources, sampledAt: sourceSampledAt()}
 			trafficPendingReports[key] = pending
 			out[key] = pending
 		}

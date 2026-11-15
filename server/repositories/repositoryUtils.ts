@@ -38,6 +38,21 @@ export function isSniSplitterChainExitRule(
     && Number(lastMember?.hostId || 0) === Number(rule.hostId || 0);
 }
 
+// Only the first enabled member of a chain faces clients; later members see
+// the previous hop as their peer, so they cannot report visitor addresses.
+export function isChainIngressRule(
+  rule: { forwardGroupMemberId?: unknown; hostId?: unknown },
+  group: { groupMode?: unknown; members?: Array<{ id?: unknown; hostId?: unknown; priority?: unknown; isEnabled?: unknown }> } | null | undefined,
+) {
+  if (!group || String(group.groupMode || "failover") !== "chain") return true;
+  const memberId = Number(rule.forwardGroupMemberId || 0);
+  if (!memberId) return true;
+  const first = [...(group.members || [])]
+    .filter((member) => truthyDatabaseFlag(member.isEnabled))
+    .sort((a, b) => Number(a.priority) - Number(b.priority) || Number(a.id || 0) - Number(b.id || 0))[0];
+  return Number(first?.id || 0) === memberId && Number(first?.hostId || 0) === Number(rule.hostId || 0);
+}
+
 export function addMonthsClamped(date: Date, months: number): Date {
   const next = new Date(date.getTime());
   const day = next.getDate();

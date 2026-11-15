@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-11-15
+
+### Features and improvements
+
+- Source IP collection for SNI routing rules: the splitter attributes each connection to the rule its handshake domain matched, accumulates connections and bytes per rule and source IP, and sends them with its traffic report. With PROXY receive enabled the parsed client address is used. Chains record only the first-hop entry; later members, which only see the previous hop, no longer count as sources (also for port forwarding chains). The splitter reads the "Collect source IPs" switch from the panel's reply to its own traffic report, so changes apply within about 10 seconds while there is traffic; the 5000 pairs per host per day limit applies. Requires entry Agent and FXP `3.11.0`.
+
+### Fixes and improvements
+
+- Fix hosts added after the panel started not sending an offline alert on their first outage while still sending the online notice when they recovered.
+
+### Version and upgrade notes
+
+- Panel, Agent and ForwardX FXP runtime are aligned at `3.11.0`. Source IPs for SNI rules appear after the entry node is upgraded to Agent/FXP `3.11.0`; upgrading only the panel leaves ordinary source collection and everything else unchanged.
+- The Agent itself has no behaviour change and is bumped together with FXP. Upgrading the Agent replaces FXP, so running SNI splitters restart once and existing connections may drop briefly; upgrade during a maintenance window.
+
 ## [3.10.2] - 2026-11-14
 
 ### Features and improvements

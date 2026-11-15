@@ -230,3 +230,29 @@ test("offline alert delay is read per channel, defaults to five minutes and stay
     assert.equal(notificationSettings({ telegramHostOfflineNotifyMinutes: value }, "telegram").hostOfflineNotifyMinutes, expected, value);
   }
 });
+
+test("a host added after priming still alerts on its first offline transition", async () => {
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url, options) => {
+    requests.push(String(options?.body || ""));
+    return Response.json({ ok: true, result: { message_id: 1 } });
+  }) as typeof fetch;
+  try {
+    await settings.setSettings({ notificationChannel: "telegram", telegramHostStatusNotify: "true" });
+    await notifier.primeHostStatusNotifier();
+    // Registered after the panel started: the notifier has never seen it.
+    const id = await runtime.insertAndGetId("hosts", { name: "late host", ip: "198.51.100.50", userId: 1, isOnline: true,
+      lastHeartbeat: new Date(Date.now() - 700_000), hostStatusNotifyEnabled: true });
+    requests.length = 0;
+    assert.ok(await notifier.sweepOfflineHostsAndNotify() >= 1);
+    assert.equal((await hosts.getHostById(id))?.isOnline, false);
+    assert.equal(requests.filter((body) => body.includes("离线告警") && body.includes("late host")).length, 1);
+    requests.length = 0;
+    await hosts.touchHostHeartbeat(id);
+    await notifier.notifyHostOnlineIfNeeded(await hosts.getHostById(id));
+    assert.equal(requests.filter((body) => body.includes("上线通知") && body.includes("late host")).length, 1, "the pair stays balanced");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

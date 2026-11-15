@@ -178,6 +178,22 @@ test("operations history transactions, source ingress isolation, geo aggregation
         ]);
         await ops.recordOperationsSources(host,[{...sample,ruleId:12},{...sample,ruleId:13}],sniContexts,new Map(),'sampled',now);
         assert.equal((await ops.getOperationsSources(start,start+86400,0,'')).ips.length,0,'shared SNI ports must not invent domain attribution');
+        // The splitter attributes each connection to the rule its domain matched.
+        const routed={...sample,ip:'203.0.113.50'};
+        await ops.recordOperationsSources(host,[{...routed,ruleId:12},{...routed,ruleId:13,bytesIn:3}],sniContexts,new Map(),undefined,now,'sni-route');
+        const routedSources=await ops.getOperationsSources(start,start+86400,0,'');
+        assert.equal(routedSources.ips.length,1);
+        assert.equal(routedSources.ips[0].ip,'203.0.113.50');
+        assert.equal(routedSources.ips[0].rules,2,'both SNI rules are counted as separate logical rules');
+        assert.equal(routedSources.totals.bytesIn,10);
+        // Splitter attribution never applies to ordinary port rules, and the
+        // splitter on an exit host is not a client-facing ingress.
+        await ops.recordOperationsSources(host,[{...routed,ip:'203.0.113.51'}],contexts,new Map(),undefined,now,'sni-route');
+        await ops.recordOperationsSources({id:2},[{...routed,ip:'203.0.113.52',ruleId:12}],sniContexts,new Map(),undefined,now,'sni-route');
+        assert.equal((await ops.getOperationsSources(start,start+86400,0,'')).ips.length,1);
+        assert.deepEqual((await rt.queryRaw('SELECT status FROM operations_source_status WHERE "hostId" = 1')).map(row=>row.status),['sampled'],'splitter reports do not overwrite the Agent sampling status');
+        await rt.executeRaw('DELETE FROM operations_source_daily WHERE ip = ?',['203.0.113.50']);
+        await rt.executeRaw('DELETE FROM operations_ip_geo WHERE address = ?',['203.0.113.50']);
         await ops.recordOperationsSources(host,[sample,{...sample,ruleId:11},{...sample,ruleId:999}],contexts,new Map([[2,new Set([1])]]),'sampled',now);
         // Exit host is never a source ingress, even for a known rule.
         await ops.recordOperationsSources({id:2},[sample,{...sample,ruleId:11}],contexts,new Map([[2,new Set([1])]]),'sampled',now);

@@ -2,6 +2,7 @@ import net from "node:net";
 import { executeRaw, queryRaw, getDatabaseKind } from "../dbRuntime";
 import { quoteIdentifier as q } from "../dbCompat";
 import { getAllSettings } from "./settingsRepository";
+import { isChainIngressRule } from "./repositoryUtils";
 import { deleteExpiredHistoryRows } from "./historyRetention";
 import { operationsDay, chinaProvince, provinceAliases, OPERATIONS_SOURCE_PAGE_SIZE, type OperationsSourceSort } from "../../shared/operations";
 import { resolveOperationsSourceGeo, SOURCE_GEO_VERSION } from "../operationsSourceGeo";
@@ -70,7 +71,12 @@ export function parseSourceObservations(value: unknown): SourceObservation[] {
   return [...merged.values()];
 }
 
-export async function recordOperationsSources(host: any, value: unknown, contexts: Map<number, any>, entryHosts: Map<number, Set<number>>, status: unknown, sampledAt?: unknown) {
+// "sni-route" samples come from the SNI splitter, which attributes each
+// connection to the rule its domain matched; "port" samples come from socket
+// tables and can only identify the listening port.
+export type SourceAttribution = "port" | "sni-route";
+
+export async function recordOperationsSources(host: any, value: unknown, contexts: Map<number, any>, entryHosts: Map<number, Set<number>>, status: unknown, sampledAt?: unknown, attribution: SourceAttribution = "port") {
   if (!await sourceAnalyticsEnabled()) return;
   const receivedAt = Math.floor(Date.now() / 1000);
   const now = Number(sampledAt);
@@ -79,10 +85,11 @@ export async function recordOperationsSources(host: any, value: unknown, context
   let rows = parseSourceObservations(value).filter(row => {
     const rule = contexts.get(row.ruleId)?.rule;
     if (!rule || !rule.isEnabled || rule.pendingDelete || rule.isForwardGroupTemplate) return false;
-    // Socket observations identify a port, not the domain selected by SNI.
-    // Keep these sources unsupported until the Agent can prove attribution.
-    if (String(rule.sni || "").trim()) return false;
+    // Socket observations identify a port, not the domain selected by SNI;
+    // only the splitter's own per-route attribution is accepted for SNI rules.
+    if (Boolean(String(rule.sni || "").trim()) !== (attribution === "sni-route")) return false;
     // Sources must be observed on a client-facing ingress, not an accounting exit.
+    if (!isChainIngressRule(rule, contexts.get(row.ruleId)?.group)) return false;
     return rule.tunnelId ? entryHosts.get(Number(rule.tunnelId))?.has(Number(host.id)) : Number(rule.hostId) === Number(host.id);
   }).map(row => {
     const rule = contexts.get(row.ruleId).rule;

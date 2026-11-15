@@ -133,7 +133,9 @@ async function notifyHostStatusChange(host: any, status: HostStatus) {
 
   if (previous === undefined) {
     lastKnownStatus.set(hostId, status);
-    if (hostStatusNotifierPrimed && status === "online") {
+    // Hosts added after priming have no recorded state; their first transition
+    // in either direction is still a real change and must notify.
+    if (hostStatusNotifierPrimed) {
       await sendHostStatusTelegram(host, status);
     }
     return;

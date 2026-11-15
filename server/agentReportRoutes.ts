@@ -950,7 +950,7 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
 
     await db.insertTrafficStatsBatch(trafficBatch);
     await recordOperationsTraffic(trafficBatch, contextsByRuleId, host);
-    if (analyticsEnabled && trafficReportId) await recordOperationsSources(host, sourceSamples, contextsByRuleId, entryHostsByTunnelId, req.body?.sourceStatus, req.body?.sourceSampledAt);
+    if (analyticsEnabled && trafficReportId) await recordOperationsSources(host, sourceSamples, contextsByRuleId, entryHostsByTunnelId, req.body?.sourceStatus, req.body?.sourceSampledAt, req.body?.sourceKind === "sni-route" ? "sni-route" : "port");
     await recordRuleQuotaTraffic(trafficBatch, contextsByRuleId);
     // Traffic can come from an old connection or a buffered report. It does
     // not acknowledge the desired configuration; only runtime/status

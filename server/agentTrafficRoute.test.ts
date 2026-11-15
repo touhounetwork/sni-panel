@@ -375,6 +375,14 @@ test("SQLite Agent traffic route is atomic, idempotent, and follows the current 
       // A different host cannot attribute the same client-facing rule to itself.
       await postTraffic(baseUrl,10,"source-wrong-host",100,0,0,{...source,stats:[]});
       assert.deepEqual(await runtime.queryRaw('SELECT "bytesIn", "bytesOut" FROM "operations_source_daily"'),[{bytesIn:14,bytesOut:18}]);
+      // SNI chain: the entry splitter attributes the client to the routed rule;
+      // the exit splitter (host 61) only ever sees the entry host as its client.
+      const sniSource = {sourceSampledAt:Math.floor(Date.now()/1000),sourceKind:"sni-route",stats:[],sourceSamples:[{ruleId:801,ip:"203.0.113.90",bytesIn:5,bytesOut:6,accounting:true}]};
+      await postTraffic(baseUrl,60,"sni-source-entry",801,0,0,sniSource);
+      await postTraffic(baseUrl,61,"sni-source-exit",802,0,0,{...sniSource,sourceSamples:[{ruleId:802,ip:"203.0.113.91",bytesIn:5,bytesOut:6,accounting:true}]});
+      // Without splitter attribution, port-based samples for SNI rules stay rejected.
+      await postTraffic(baseUrl,60,"sni-source-port",801,0,0,{...sniSource,sourceKind:undefined,sourceSamples:[{ruleId:801,ip:"203.0.113.92",bytesIn:5,bytesOut:6,accounting:true}]});
+      assert.deepEqual(await runtime.queryRaw('SELECT "ruleId", "hostId", "ip", "logicalRuleId" FROM "operations_source_daily" WHERE "ip" LIKE ? ORDER BY "ip"',["203.0.113.%"]),[{ruleId:801,hostId:60,ip:"203.0.113.90",logicalRuleId:800}]);
     } finally {
       if (server) await new Promise((resolve) => server.close(() => resolve()));
       await runtime.closeDatabase();

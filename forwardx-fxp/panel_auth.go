@@ -57,7 +57,11 @@ type fxpPanelRequestAuth struct {
 type fxpPanelResponse struct {
 	StatusCode int
 	Status     string
+	// Body holds at most fxpPanelResponseBodyLimit bytes of a successful reply.
+	Body []byte
 }
+
+const fxpPanelResponseBodyLimit = 64 * 1024
 
 func normalizeFXPPanelURL(panelURL string) string {
 	return strings.TrimRight(strings.TrimSpace(panelURL), "/")
@@ -369,9 +373,14 @@ func postFXPEncryptedPanelRequest(
 		if err != nil {
 			return fxpPanelResponse{}, err
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 2048))
+		var body []byte
+		if res.StatusCode < 300 {
+			body, _ = io.ReadAll(io.LimitReader(res.Body, fxpPanelResponseBodyLimit))
+		} else {
+			_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 2048))
+		}
 		_ = res.Body.Close()
-		lastResponse = fxpPanelResponse{StatusCode: res.StatusCode, Status: res.Status}
+		lastResponse = fxpPanelResponse{StatusCode: res.StatusCode, Status: res.Status, Body: body}
 		observeFXPAgentAuthCapability(panelURL, token, res.Header.Get(fxpAgentAuthCapabilityHeader))
 		if res.StatusCode < 300 {
 			return lastResponse, nil
