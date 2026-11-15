@@ -171,10 +171,11 @@ func TestHostCommandPullErrorDoesNotBlockQueue(t *testing.T) {
 		}
 		return hostCommandPull{Success: true, TaskID: taskID, Command: "echo ok", TimeoutSeconds: 10}, nil
 	}, func(_ Config, result map[string]any) error {
-		panel.done <- result["taskId"].(string)
+		// Store before signalling: wait reads the result as soon as it hears the id.
 		panel.mu.Lock()
 		panel.results[result["taskId"].(string)] = result
 		panel.mu.Unlock()
+		panel.done <- result["taskId"].(string)
 		return nil
 	}, &strings.Builder{})
 	s.schedule(Config{}, "e1")
